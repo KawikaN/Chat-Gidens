@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 from PyPDF2 import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.embeddings import OpenAIEmbeddings
-from langchain.vectorstores import Chroma
+from langchain.vectorstores import FAISS
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
 from langchain.chat_models import ChatOpenAI
@@ -46,24 +46,8 @@ def process_pdfs_in_batches(pdf_files, batch_size=10):
     return all_chunks
 
 def get_vector_store(text_chunks):
-    # For OpenAI Embeddings
-    embeddings = OpenAIEmbeddings(
-        chunk_size=100,  # Process 100 chunks at a time
-        max_retries=3,   # Add retries for reliability
-        request_timeout=60  # Increase timeout for large batches
-    )
-    
-    # Process chunks in batches to avoid token limits
-    batch_size = 100
-    vectorstore = None
-    
-    for i in range(0, len(text_chunks), batch_size):
-        batch = text_chunks[i:i + batch_size]
-        if vectorstore is None:
-            vectorstore = Chroma.from_texts(texts=batch, embedding=embeddings)
-        else:
-            vectorstore.add_texts(batch)
-    
+    embeddings = OpenAIEmbeddings()
+    vectorstore = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
     return vectorstore
 
 def get_conversation_chain(vector_store):
@@ -289,7 +273,22 @@ def on_text_change():
 evt = False
 def main():
     load_dotenv()
-    st.set_page_config(page_title='Chat with Your own PDFs', page_icon=':books:')
+    st.set_page_config(
+        page_title='Chat with Your own PDFs', 
+        page_icon=':books:',
+        layout='wide',
+        initial_sidebar_state='expanded'
+    )
+
+    # Force dark mode
+    st.markdown("""
+    <style>
+    .stApp {
+        background-color: #0e1117 !important;
+        color: #ffffff !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
     st.write(css, unsafe_allow_html=True)
     
@@ -434,6 +433,12 @@ def main():
                 st.rerun()
             else:
                 st.error("❌ Failed to regenerate credentials.json. Check your environment variables or Streamlit secrets.")
+        
+        # Add test calendar integration button
+        if st.button("🧪 Test Calendar Integration", help="Add a test event to your Google Calendar to verify it's working"):
+            st.write("🧪 **DEBUG**: Testing calendar integration...")
+            test_result = calendar_integration.test_calendar_integration()
+            st.markdown(test_result)
         
         # Check Google Calendar access status
         has_access, status = calendar_integration.check_google_calendar_access()

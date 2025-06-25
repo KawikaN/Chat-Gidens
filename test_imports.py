@@ -45,13 +45,6 @@ def test_imports():
         return False
     
     try:
-        from langchain.vectorstores import Chroma
-        print("✅ langchain.vectorstores (Chroma)")
-    except ImportError as e:
-        print(f"❌ langchain.vectorstores: {e}")
-        return False
-    
-    try:
         from langchain.memory import ConversationBufferMemory
         print("✅ langchain.memory")
     except ImportError as e:
@@ -101,10 +94,17 @@ def test_imports():
         return False
     
     try:
-        import chromadb
-        print("✅ chromadb")
+        import numpy as np
+        print("✅ numpy")
     except ImportError as e:
-        print(f"❌ chromadb: {e}")
+        print(f"❌ numpy: {e}")
+        return False
+    
+    try:
+        import faiss
+        print("✅ faiss-cpu")
+    except ImportError as e:
+        print(f"❌ faiss-cpu: {e}")
         return False
     
     try:

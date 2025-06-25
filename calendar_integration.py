@@ -103,45 +103,60 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
                         <p style="font-size: 18px; margin-bottom: 15px;">Your Google Calendar is now connected!</p>
                         <p style="font-size: 16px; margin-bottom: 25px;">Redirecting you back to your chatbot...</p>
                         <div style="margin-top: 20px;">
-                            <button onclick="window.close()" style="background: #4CAF50; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 16px; cursor: pointer; transition: background 0.3s;" onmouseover="this.style.background='#45a049'" onmouseout="this.style.background='#4CAF50'">
-                                Close Window
+                            <button onclick="redirectToStreamlit()" style="background: #4CAF50; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 16px; cursor: pointer; transition: background 0.3s;" onmouseover="this.style.background='#45a049'" onmouseout="this.style.background='#4CAF50'">
+                                Return to Chatbot
                             </button>
                         </div>
                     </div>
                     <script>
-                        // Try to redirect to Streamlit app first
-                        try {
-                            // Attempt to redirect to common Streamlit ports
-                            const streamlitUrls = [
-                                'http://localhost:8501',
-                                'http://localhost:8502', 
-                                'http://localhost:8503',
-                                'http://127.0.0.1:8501',
-                                'http://127.0.0.1:8502',
-                                'http://127.0.0.1:8503'
-                            ];
-                            
-                            // Try each URL
-                            for (let url of streamlitUrls) {
-                                try {
-                                    window.open(url, '_self');
-                                    break;
-                                } catch (e) {
-                                    console.log('Could not redirect to:', url);
+                        function redirectToStreamlit() {
+                            // Try to redirect to the same tab first
+                            try {
+                                // Get the current window's opener or try to redirect in the same tab
+                                if (window.opener) {
+                                    // If this window was opened by another window, redirect the opener
+                                    window.opener.location.href = window.opener.location.href;
+                                    window.close();
+                                } else {
+                                    // Try to redirect in the same tab
+                                    const streamlitUrls = [
+                                        window.location.origin,
+                                        'http://localhost:8501',
+                                        'http://localhost:8502', 
+                                        'http://localhost:8503',
+                                        'http://127.0.0.1:8501',
+                                        'http://127.0.0.1:8502',
+                                        'http://127.0.0.1:8503'
+                                    ];
+                                    
+                                    // Try to redirect to the same origin first
+                                    if (window.location.origin !== 'http://localhost:8080') {
+                                        window.location.href = window.location.origin;
+                                    } else {
+                                        // Fallback to common Streamlit URLs
+                                        for (let url of streamlitUrls) {
+                                            if (url !== window.location.origin) {
+                                                window.location.href = url;
+                                                break;
+                                            }
+                                        }
+                                    }
                                 }
+                            } catch (e) {
+                                console.log('Redirect failed:', e);
+                                // Fallback: close window
+                                window.close();
                             }
-                        } catch (e) {
-                            console.log('Redirect failed, will auto-close');
                         }
                         
-                        // Auto-close after 3 seconds as fallback
+                        // Auto-redirect after 2 seconds
                         setTimeout(function() {
-                            window.close();
-                        }, 3000);
+                            redirectToStreamlit();
+                        }, 2000);
                         
-                        // Also close on any click
+                        // Also redirect on any click
                         document.addEventListener('click', function() {
-                            window.close();
+                            redirectToStreamlit();
                         });
                     </script>
                 </body>
@@ -395,7 +410,7 @@ class CalendarIntegration:
                         print("🖥️ Using desktop OAuth client...")
                         print("🔐 Opening browser for OAuth authentication...")
                         flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
-                        creds = flow.run_local_server(port=0)
+                        creds = flow.run_local_server(port=0, open_browser=True, prompt='consent')
                         print("✅ OAuth authentication completed!")
                     else:
                         return False, "❌ Invalid credentials.json format. Please download OAuth 2.0 credentials for Desktop application."
@@ -461,8 +476,8 @@ class CalendarIntegration:
                 print("🔐 Opening browser for OAuth authentication...")
                 print(f"   Authorization URL: {auth_url}")
                 
-                # Open the browser
-                webbrowser.open(auth_url)
+                # Open the browser in the same tab instead of new tab
+                webbrowser.open(auth_url, new=0)  # new=0 opens in same tab
                 
                 # Wait for the authorization code (with timeout)
                 print("⏳ Waiting for OAuth callback...")
@@ -583,11 +598,22 @@ class CalendarIntegration:
         try:
             # Parse date and time
             start_date = event_data.get('start_date', '')
-            start_time = event_data.get('start_time', '00:00')
+            start_time = event_data.get('start_time', '19:00')  # Default to 7 PM
             
-            # Create datetime object
+            print(f"🔍 DEBUG: Adding event to Google Calendar:")
+            print(f"   Name: {event_data.get('name', 'Unknown')}")
+            print(f"   Date: {start_date}")
+            print(f"   Time: {start_time}")
+            print(f"   Venue: {event_data.get('venue', 'Unknown')}")
+            
+            # Create datetime object with proper timezone
             start_datetime = datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M")
             end_datetime = start_datetime + timedelta(hours=2)  # Default 2-hour duration
+            
+            # Check if event is in the past
+            if start_datetime < datetime.now():
+                print(f"⚠️ WARNING: Event is in the past: {start_datetime}")
+                # Still add it but warn the user
             
             event = {
                 'summary': event_data.get('name', 'Event'),
@@ -601,14 +627,30 @@ class CalendarIntegration:
                     'dateTime': end_datetime.isoformat(),
                     'timeZone': 'Pacific/Honolulu',
                 },
+                'reminders': {
+                    'useDefault': False,
+                    'overrides': [
+                        {'method': 'email', 'minutes': 24 * 60},  # 1 day before
+                        {'method': 'popup', 'minutes': 60},       # 1 hour before
+                    ],
+                },
             }
             
-            event = self.google_service.events().insert(calendarId='primary', body=event).execute()
-            print(f"Event created: {event.get('htmlLink')}")
+            print(f"🔍 DEBUG: Sending event to Google Calendar API...")
+            created_event = self.google_service.events().insert(calendarId='primary', body=event).execute()
+            
+            print(f"✅ Event created successfully!")
+            print(f"   Event ID: {created_event.get('id')}")
+            print(f"   Event Link: {created_event.get('htmlLink')}")
+            print(f"   Start: {created_event.get('start', {}).get('dateTime')}")
+            print(f"   End: {created_event.get('end', {}).get('dateTime')}")
+            
             return True
             
         except Exception as e:
-            print(f"Error adding event to Google Calendar: {e}")
+            print(f"❌ Error adding event to Google Calendar: {e}")
+            import traceback
+            print(f"❌ DEBUG: Full traceback: {traceback.format_exc()}")
             return False
     
     def create_ical_file(self, events: List[Dict], filename: str = "events.ics") -> str:
@@ -862,7 +904,7 @@ END:VEVENT
                     print("🔐 DEBUG: InstalledAppFlow created successfully")
                     
                     print("🔐 DEBUG: About to call run_local_server...")
-                    creds = flow.run_local_server(port=0)
+                    creds = flow.run_local_server(port=0, open_browser=True, prompt='consent')
                     print("🔐 DEBUG: run_local_server completed successfully")
                     
                     # Save the credentials
@@ -917,6 +959,55 @@ END:VEVENT
             import traceback
             print(f"❌ DEBUG: Full traceback: {traceback.format_exc()}")
             return False, f"❌ OAuth flow failed: {str(e)}"
+
+    def test_calendar_integration(self) -> str:
+        """
+        Test function to add a sample event to Google Calendar for debugging.
+        
+        Returns:
+            String with test results
+        """
+        try:
+            # Check if we have access
+            has_access, status = self.check_google_calendar_access()
+            if not has_access:
+                return f"❌ No Google Calendar access: {status}"
+            
+            # Create a test event for tomorrow
+            tomorrow = datetime.now() + timedelta(days=1)
+            test_event = {
+                'name': 'Test Event - Hawaii Business Assistant',
+                'start_date': tomorrow.strftime('%Y-%m-%d'),
+                'start_time': '14:00',  # 2 PM
+                'venue': 'Test Venue - Honolulu',
+                'description': 'This is a test event to verify Google Calendar integration is working correctly.'
+            }
+            
+            print(f"🧪 DEBUG: Testing calendar integration with event:")
+            print(f"   {test_event}")
+            
+            # Try to add the test event
+            success = self.add_event_to_google_calendar(test_event)
+            
+            if success:
+                return (
+                    "✅ **Test Event Added Successfully!**\n\n"
+                    "A test event has been added to your Google Calendar for tomorrow at 2 PM.\n\n"
+                    "**Check your calendar:**\n"
+                    "1. Open Google Calendar\n"
+                    "2. Look for 'Test Event - Hawaii Business Assistant'\n"
+                    "3. It should appear tomorrow at 2 PM\n\n"
+                    "**If you don't see it:**\n"
+                    "• Check your calendar view (make sure you're looking at the right date)\n"
+                    "• Try refreshing your calendar\n"
+                    "• Check if you have multiple calendars and it might be in a different one\n\n"
+                    "The integration is working correctly if you see this test event!"
+                )
+            else:
+                return "❌ **Test Event Failed**\n\nThere was an error adding the test event to your Google Calendar. Check the console for detailed error messages."
+                
+        except Exception as e:
+            return f"❌ **Test Failed**: {str(e)}"
 
 # Global instance
 calendar_integration = CalendarIntegration() 
