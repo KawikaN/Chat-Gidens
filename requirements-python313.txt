@@ -1,5 +1,5 @@
-# Streamlit Cloud compatible requirements
-# Optimized for deployment on streamlit.io
+# Python 3.13 compatible requirements
+# This file excludes packages that may not have wheels for Python 3.13
 
 # Core dependencies
 streamlit>=1.31.1
@@ -14,7 +14,7 @@ openai>=1.12.0
 # PDF processing
 PyPDF2>=3.0.1
 
-# Vector database (ChromaDB for cloud compatibility)
+# Vector database (use ChromaDB instead of FAISS for better Python 3.13 compatibility)
 chromadb>=0.4.0
 
 # Google Calendar integration
@@ -42,12 +42,6 @@ mdurl>=0.1.2
 # Development and debugging
 watchdog>=3.0.0
 
-# Note: Excluded packages that cause issues on Streamlit Cloud:
-# - sentencepiece (build issues)
-# - sentence-transformers (large size)
-# - torch (large size and build issues)
-# - faiss-cpu (build issues)
-# 
-# The application will work with reduced text processing capabilities
-# but all core features (PDF chat, Google Calendar) will function normally.
-
+# Note: sentencepiece, sentence-transformers, and torch are excluded
+# due to Python 3.13 compatibility issues. The application will work
+# without these packages, but with reduced text processing capabilities. 

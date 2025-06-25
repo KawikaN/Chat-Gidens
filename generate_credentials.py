@@ -36,7 +36,7 @@ def generate_credentials():
     
     if missing_vars:
         print(f"❌ Missing required environment variables: {', '.join(missing_vars)}")
-        print("Please check your .env file and ensure all Google OAuth credentials are set.")
+        print("Please check your .env file (local) or Streamlit secrets (cloud) and ensure all Google OAuth credentials are set.")
         return False
     
     # Create credentials structure

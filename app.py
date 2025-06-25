@@ -2,8 +2,8 @@ import streamlit as st
 from dotenv import load_dotenv
 from PyPDF2 import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
-from langchain.embeddings import OpenAIEmbeddings, HuggingFaceInstructEmbeddings
-from langchain.vectorstores import FAISS
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.vectorstores import Chroma
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
 from langchain.chat_models import ChatOpenAI
@@ -60,7 +60,7 @@ def get_vector_store(text_chunks):
     for i in range(0, len(text_chunks), batch_size):
         batch = text_chunks[i:i + batch_size]
         if vectorstore is None:
-            vectorstore = FAISS.from_texts(texts=batch, embedding=embeddings)
+            vectorstore = Chroma.from_texts(texts=batch, embedding=embeddings)
         else:
             vectorstore.add_texts(batch)
     
@@ -433,7 +433,7 @@ def main():
                 st.success("✅ credentials.json regenerated successfully!")
                 st.rerun()
             else:
-                st.error("❌ Failed to regenerate credentials.json. Check your .env file.")
+                st.error("❌ Failed to regenerate credentials.json. Check your environment variables or Streamlit secrets.")
         
         # Check Google Calendar access status
         has_access, status = calendar_integration.check_google_calendar_access()

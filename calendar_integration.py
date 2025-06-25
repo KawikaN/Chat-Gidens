@@ -808,11 +808,15 @@ END:VEVENT
                     print("❌ DEBUG: Failed to generate credentials.json from environment variables")
                     return False, (
                         "❌ **Credentials file not found**\n\n"
-                        "Please set up your Google OAuth credentials in the .env file:\n\n"
+                        "Please set up your Google OAuth credentials:\n\n"
+                        "**For local development:**\n"
                         "1. Add your Google OAuth credentials to .env file\n"
                         "2. Or download credentials.json from Google Cloud Console\n"
                         "3. Place it in your project root directory\n\n"
-                        "See CALENDAR_SETUP.md for detailed instructions."
+                        "**For Streamlit Cloud:**\n"
+                        "1. Configure secrets in your Streamlit Cloud app settings\n"
+                        "2. Add all required Google OAuth environment variables\n\n"
+                        "See STREAMLIT_CLOUD_DEPLOYMENT.md for detailed instructions."
                     )
             
             print("✅ DEBUG: credentials.json found")
