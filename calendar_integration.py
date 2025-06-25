@@ -17,6 +17,59 @@ import urllib.parse
 # Google Calendar API setup
 SCOPES = ['https://www.googleapis.com/auth/calendar.events']
 
+def generate_credentials_from_env():
+    """Generate credentials.json from environment variables"""
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        
+        # Get credentials from environment variables
+        client_id = os.getenv('GOOGLE_CLIENT_ID')
+        project_id = os.getenv('GOOGLE_PROJECT_ID')
+        auth_uri = os.getenv('GOOGLE_AUTH_URI')
+        token_uri = os.getenv('GOOGLE_TOKEN_URI')
+        auth_provider_x509_cert_url = os.getenv('GOOGLE_AUTH_PROVIDER_X509_CERT_URL')
+        client_secret = os.getenv('GOOGLE_CLIENT_SECRET')
+        
+        # Validate that all required variables are present
+        required_vars = {
+            'GOOGLE_CLIENT_ID': client_id,
+            'GOOGLE_PROJECT_ID': project_id,
+            'GOOGLE_AUTH_URI': auth_uri,
+            'GOOGLE_TOKEN_URI': token_uri,
+            'GOOGLE_AUTH_PROVIDER_X509_CERT_URL': auth_provider_x509_cert_url,
+            'GOOGLE_CLIENT_SECRET': client_secret
+        }
+        
+        missing_vars = [var for var, value in required_vars.items() if not value]
+        
+        if missing_vars:
+            print(f"❌ Missing required environment variables: {', '.join(missing_vars)}")
+            return False
+        
+        # Create credentials structure
+        credentials = {
+            "web": {
+                "client_id": client_id,
+                "project_id": project_id,
+                "auth_uri": auth_uri,
+                "token_uri": token_uri,
+                "auth_provider_x509_cert_url": auth_provider_x509_cert_url,
+                "client_secret": client_secret
+            }
+        }
+        
+        # Write to credentials.json
+        with open('credentials.json', 'w') as f:
+            json.dump(credentials, f, indent=2)
+        
+        print("✅ credentials.json generated from environment variables!")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error generating credentials.json: {e}")
+        return False
+
 class OAuthCallbackHandler(BaseHTTPRequestHandler):
     """Simple HTTP server to handle OAuth callback"""
     
@@ -189,9 +242,13 @@ class CalendarIntegration:
             Tuple of (has_access, status_message)
         """
         try:
-            # Check if credentials file exists
+            # Check if credentials file exists, if not generate from environment variables
             if not os.path.exists('credentials.json'):
-                return False, "Google Calendar setup required. Please follow the setup guide to download credentials.json"
+                print("🔐 DEBUG: credentials.json not found, generating from environment variables...")
+                if generate_credentials_from_env():
+                    print("✅ DEBUG: credentials.json generated successfully")
+                else:
+                    return False, "Google Calendar setup required. Please set up environment variables or follow the setup guide to download credentials.json"
             
             # Check if we have valid tokens
             if os.path.exists('token.pickle'):
@@ -744,17 +801,19 @@ END:VEVENT
             
             # Check if credentials file exists first
             if not os.path.exists('credentials.json'):
-                print("❌ DEBUG: credentials.json not found")
-                return False, (
-                    "❌ **Credentials file not found**\n\n"
-                    "Please download your Google Calendar credentials first:\n\n"
-                    "1. Go to [Google Cloud Console](https://console.cloud.google.com/)\n"
-                    "2. Create a project and enable Google Calendar API\n"
-                    "3. Create OAuth 2.0 credentials (Desktop application)\n"
-                    "4. Download the JSON file and rename it to 'credentials.json'\n"
-                    "5. Place it in your project root directory\n\n"
-                    "See CALENDAR_SETUP.md for detailed instructions."
-                )
+                print("🔐 DEBUG: credentials.json not found, generating from environment variables...")
+                if generate_credentials_from_env():
+                    print("✅ DEBUG: credentials.json generated successfully")
+                else:
+                    print("❌ DEBUG: Failed to generate credentials.json from environment variables")
+                    return False, (
+                        "❌ **Credentials file not found**\n\n"
+                        "Please set up your Google OAuth credentials in the .env file:\n\n"
+                        "1. Add your Google OAuth credentials to .env file\n"
+                        "2. Or download credentials.json from Google Cloud Console\n"
+                        "3. Place it in your project root directory\n\n"
+                        "See CALENDAR_SETUP.md for detailed instructions."
+                    )
             
             print("✅ DEBUG: credentials.json found")
             print("🔐 Starting simplified OAuth flow...")

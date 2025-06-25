@@ -425,6 +425,16 @@ def main():
             st.success("✅ Authentication cleared! You'll need to re-authenticate.")
             st.rerun()
         
+        # Add regenerate credentials button
+        if st.button("🔧 Regenerate Credentials", help="Regenerate credentials.json from environment variables"):
+            st.write("🔧 **DEBUG**: Regenerating credentials.json from environment variables...")
+            from calendar_integration import generate_credentials_from_env
+            if generate_credentials_from_env():
+                st.success("✅ credentials.json regenerated successfully!")
+                st.rerun()
+            else:
+                st.error("❌ Failed to regenerate credentials.json. Check your .env file.")
+        
         # Check Google Calendar access status
         has_access, status = calendar_integration.check_google_calendar_access()
         
