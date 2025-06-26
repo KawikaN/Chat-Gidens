@@ -87,7 +87,12 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
             # Check if this is an OAuth callback
             if 'code' in query_params:
                 auth_code = query_params['code'][0]
+                state_param = query_params.get('state', [''])[0]  # Get the state parameter
+                streamlit_url = urllib.parse.unquote(state_param) if state_param else "http://localhost:8501"
+                
                 print(f"✅ Received OAuth authorization code")
+                print(f"🔍 DEBUG: State parameter: {state_param}")
+                print(f"🔍 DEBUG: Streamlit URL: {streamlit_url}")
                 
                 # Send success response to browser
                 self.send_response(200)
@@ -110,37 +115,19 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
                     </div>
                     <script>
                         function redirectToStreamlit() {
-                            // Try to redirect to the same tab first
                             try {
-                                // Get the current window's opener or try to redirect in the same tab
-                                if (window.opener) {
-                                    // If this window was opened by another window, redirect the opener
-                                    window.opener.location.href = window.opener.location.href;
+                                // Use the Streamlit URL from the state parameter
+                                let streamlitUrl = '""" + streamlit_url + """';
+                                
+                                console.log('Redirecting to:', streamlitUrl);
+                                
+                                // If this window was opened by another window, redirect the opener
+                                if (window.opener && !window.opener.closed) {
+                                    window.opener.location.href = streamlitUrl;
                                     window.close();
                                 } else {
-                                    // Try to redirect in the same tab
-                                    const streamlitUrls = [
-                                        window.location.origin,
-                                        'http://localhost:8501',
-                                        'http://localhost:8502', 
-                                        'http://localhost:8503',
-                                        'http://127.0.0.1:8501',
-                                        'http://127.0.0.1:8502',
-                                        'http://127.0.0.1:8503'
-                                    ];
-                                    
-                                    // Try to redirect to the same origin first
-                                    if (window.location.origin !== 'http://localhost:8080') {
-                                        window.location.href = window.location.origin;
-                                    } else {
-                                        // Fallback to common Streamlit URLs
-                                        for (let url of streamlitUrls) {
-                                            if (url !== window.location.origin) {
-                                                window.location.href = url;
-                                                break;
-                                            }
-                                        }
-                                    }
+                                    // Redirect in the same tab
+                                    window.location.href = streamlitUrl;
                                 }
                             } catch (e) {
                                 console.log('Redirect failed:', e);
@@ -149,10 +136,10 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
                             }
                         }
                         
-                        // Auto-redirect after 2 seconds
+                        // Auto-redirect after 3 seconds
                         setTimeout(function() {
                             redirectToStreamlit();
-                        }, 2000);
+                        }, 3000);
                         
                         // Also redirect on any click
                         document.addEventListener('click', function() {
@@ -300,8 +287,13 @@ class CalendarIntegration:
                             return False, "⏰ Google Calendar connection timed out"
                         except Exception as e:
                             signal.alarm(0)  # Cancel the alarm
-                            if "invalid_grant" in str(e) or "token_expired" in str(e):
+                            error_str = str(e).lower()
+                            if "invalid_grant" in error_str or "token_expired" in error_str:
                                 return False, "🔄 Google Calendar token expired. Please re-authenticate."
+                            elif "insufficient authentication scopes" in error_str or "insufficientpermissions" in error_str or "403" in error_str:
+                                # Token exists but doesn't have proper calendar permissions
+                                print("🔐 DEBUG: Token exists but lacks calendar permissions, requiring re-authentication")
+                                return False, "🔐 Google Calendar permissions insufficient. Please re-authenticate to grant calendar access."
                             else:
                                 return False, f"❌ Google Calendar access error: {str(e)}"
                     except Exception as e:
@@ -319,8 +311,13 @@ class CalendarIntegration:
                             
                             return True, "✅ Google Calendar access confirmed"
                         except Exception as e:
-                            if "invalid_grant" in str(e) or "token_expired" in str(e):
+                            error_str = str(e).lower()
+                            if "invalid_grant" in error_str or "token_expired" in error_str:
                                 return False, "🔄 Google Calendar token expired. Please re-authenticate."
+                            elif "insufficient authentication scopes" in error_str or "insufficientpermissions" in error_str or "403" in error_str:
+                                # Token exists but doesn't have proper calendar permissions
+                                print("🔐 DEBUG: Token exists but lacks calendar permissions, requiring re-authentication")
+                                return False, "🔐 Google Calendar permissions insufficient. Please re-authenticate to grant calendar access."
                             else:
                                 return False, f"❌ Google Calendar access error: {str(e)}"
                 elif creds and creds.expired and creds.refresh_token:
@@ -409,9 +406,23 @@ class CalendarIntegration:
                         # Desktop client
                         print("🖥️ Using desktop OAuth client...")
                         print("🔐 Opening browser for OAuth authentication...")
-                        flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
-                        creds = flow.run_local_server(port=0, open_browser=True, prompt='consent')
-                        print("✅ OAuth authentication completed!")
+                        print(f"   Authorization URL: {auth_url}")
+                        
+                        # Store the current Streamlit URL in the auth URL for later retrieval
+                        streamlit_url = "http://localhost:8501"  # Default fallback
+                        try:
+                            # Try to get the current URL from environment or default to localhost
+                            if 'STREAMLIT_SERVER_PORT' in os.environ:
+                                port = os.environ['STREAMLIT_SERVER_PORT']
+                                streamlit_url = f"http://localhost:{port}"
+                        except:
+                            pass
+                        
+                        # Add the Streamlit URL as a state parameter
+                        auth_url_with_state = f"{auth_url}&state={urllib.parse.quote(streamlit_url)}"
+                        
+                        # Open the browser in the same tab instead of new tab
+                        webbrowser.open(auth_url_with_state, new=0)  # new=0 opens in same tab
                     else:
                         return False, "❌ Invalid credentials.json format. Please download OAuth 2.0 credentials for Desktop application."
                 
@@ -476,8 +487,21 @@ class CalendarIntegration:
                 print("🔐 Opening browser for OAuth authentication...")
                 print(f"   Authorization URL: {auth_url}")
                 
+                # Store the current Streamlit URL in the auth URL for later retrieval
+                streamlit_url = "http://localhost:8501"  # Default fallback
+                try:
+                    # Try to get the current URL from environment or default to localhost
+                    if 'STREAMLIT_SERVER_PORT' in os.environ:
+                        port = os.environ['STREAMLIT_SERVER_PORT']
+                        streamlit_url = f"http://localhost:{port}"
+                except:
+                    pass
+                
+                # Add the Streamlit URL as a state parameter
+                auth_url_with_state = f"{auth_url}&state={urllib.parse.quote(streamlit_url)}"
+                
                 # Open the browser in the same tab instead of new tab
-                webbrowser.open(auth_url, new=0)  # new=0 opens in same tab
+                webbrowser.open(auth_url_with_state, new=0)  # new=0 opens in same tab
                 
                 # Wait for the authorization code (with timeout)
                 print("⏳ Waiting for OAuth callback...")
@@ -512,6 +536,12 @@ class CalendarIntegration:
         """Clear cached authentication status to force a fresh check"""
         self.auth_status = "not_checked"
         self.google_service = None
+    
+    def clear_authentication_for_permissions_issue(self):
+        """Clear authentication specifically when insufficient permissions are detected"""
+        print("🔐 DEBUG: Clearing authentication due to insufficient permissions...")
+        self.force_clear_authentication()
+        return "🔐 Authentication cleared due to insufficient permissions. Please re-authenticate to grant proper calendar access."
     
     def force_clear_authentication(self):
         """Force clear all saved authentication to ensure fresh OAuth"""
