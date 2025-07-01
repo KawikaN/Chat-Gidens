@@ -22,83 +22,82 @@ import pickle
 import webbrowser
 import requests
 from langchain.schema import AIMessage, HumanMessage
+from google.auth.exceptions import RefreshError
 
 # Calendar integration constants and functions
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
 def get_credentials():
-    """Get valid Google Calendar credentials, handling token refresh and corruption."""
+    """
+    Gets valid Google Calendar credentials from token.pickle.
+    Refreshes the token if it's expired. Does NOT initiate a new auth flow.
+    """
     creds = None
-    if os.path.exists('token.json'):
+    if os.path.exists('token.pickle'):
         try:
-            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-        except ValueError:
-            # The token file is malformed or missing required fields (e.g., refresh_token).
-            # Delete it to force re-authentication.
-            os.remove('token.json')
-            return None
+            with open('token.pickle', 'rb') as token_file:
+                creds = pickle.load(token_file)
+        except Exception as e:
+            print(f"Error loading token.pickle: {e}")
+            return None # Token file is corrupt.
 
-    # If there are no credentials or they are invalid.
+    # If credentials are not valid, attempt to refresh them.
     if not creds or not creds.valid:
-        # If creds are expired and a refresh token exists, try to refresh them.
         if creds and creds.expired and creds.refresh_token:
             try:
                 creds.refresh(Request())
-                # Save the refreshed credentials back to the file.
-                with open('token.json', 'w') as token:
-                    token.write(creds.to_json())
-            except Exception:
-                # If refresh fails, the token is likely revoked. Delete it.
-                os.remove('token.json')
+            except RefreshError as e:
+                # The refresh token is invalid or revoked. Delete the token and force re-authentication.
+                print(f"Token refresh failed: {e}. Re-authentication is required.")
+                if os.path.exists('token.pickle'):
+                    os.remove('token.pickle')
                 return None
+            except Exception as e:
+                # Handle other potential exceptions during refresh.
+                print(f"Failed to refresh token with a general error: {e}")
+                return None
+            
+            # Save the newly refreshed credentials for the next run.
+            with open('token.pickle', 'wb') as token_file:
+                pickle.dump(creds, token_file)
         else:
-            # The credentials are not valid and cannot be refreshed.
-            # This can happen if the token file exists but is bad.
-            if os.path.exists('token.json'):
-                os.remove('token.json')
+            # If there are no credentials or they cannot be refreshed, return None to trigger auth flow.
             return None
-
+    
     return creds
 
-def check_google_calendar_access():
-    """Check if we have access to Google Calendar"""
-    creds = get_credentials()
-    if not creds:
-        return False, "Authentication required"
-    
+def run_auth_flow():
+    """
+    Initiates the full, browser-based authentication flow.
+    This should only be called when the user explicitly clicks a login button.
+    """
     try:
-        service = build('calendar', 'v3', credentials=creds)
-        service.calendars().get(calendarId='primary').execute()
-        return True, "Access granted"
-    except Exception as e:
-        return False, f"Access error: {str(e)}"
-            
-def initiate_oauth_flow():
-    """Initiate OAuth flow, ensuring a refresh token is requested."""
-    try:
-        # Ensure any old token is gone before starting a new flow.
-        if os.path.exists('token.json'):
-            os.remove('token.json')
-            
-        flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-        
-        # Force the consent prompt to ensure a refresh token is always issued on first auth.
-        creds = flow.run_local_server(port=8085, prompt='consent')
-        
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
-        
-        return True, "Authentication successful! You can now add events to your Google Calendar."
-    except FileNotFoundError:
-        return False, "credentials.json not found. Please follow setup instructions."
-    except Exception as e:
-        return False, f"Authentication failed: {str(e)}"
+        if not os.path.exists('credentials.json'):
+            st.error("Authentication error: `credentials.json` not found. Please follow setup instructions.")
+            return None
 
-def add_event_to_google_calendar(event_data):
+        flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+        with st.spinner("A browser tab has been opened for authentication. Please complete the sign-in process."):
+            creds = flow.run_local_server(
+                port=8080,
+                prompt='consent',
+                access_type='offline'
+            )
+        
+        # Save the credentials for the next run
+        with open('token.pickle', 'wb') as token_file:
+            pickle.dump(creds, token_file)
+        
+        st.success("Authentication successful!")
+        return creds
+    except Exception as e:
+        st.error(f"The authentication flow failed: {e}")
+        return None
+
+def add_event_to_google_calendar(event_data, creds):
     """Add a single event to Google Calendar"""
-    creds = get_credentials()
     if not creds:
-        return False, "Authentication required. Please grant access in the sidebar."
+        return False, "Authentication credentials were not provided."
         
     try:
         service = build('calendar', 'v3', credentials=creds)
@@ -121,6 +120,11 @@ def add_event_to_google_calendar(event_data):
         return True, f"Event created: {event.get('htmlLink')}"
         
     except Exception as e:
+        # Catch potential googleapiclient.errors.HttpError for auth issues
+        if 'invalid_grant' in str(e) or 'invalid_credentials' in str(e):
+            print("Authentication error during API call. Deleting token to force re-auth.")
+            if os.path.exists('token.pickle'):
+                os.remove('token.pickle')
         return False, f"Failed to add event: {str(e)}"
 
 def parse_event_string(event_string):
@@ -170,9 +174,12 @@ def parse_event_string(event_string):
     except Exception:
         return None
 
-def add_events_to_calendar(events, calendar_type="google"):
+def add_events_to_calendar(events, calendar_type="google", creds=None):
     """Add events to calendar (Google Calendar or iCal file)"""
     if calendar_type == "google":
+        if not creds:
+            return "Authentication credentials are required to add events to Google Calendar."
+
         success_count = 0
         failed_count = 0
         results = []
@@ -183,7 +190,7 @@ def add_events_to_calendar(events, calendar_type="google"):
                 
             event_data = parse_event_string(event_string)
             if event_data:
-                success, message = add_event_to_google_calendar(event_data)
+                success, message = add_event_to_google_calendar(event_data, creds)
                 if success:
                     success_count += 1
                     results.append(f"✅ {event_data['summary']}")
@@ -242,11 +249,15 @@ def test_calendar_integration():
             'end_time': (datetime.datetime.now() + datetime.timedelta(hours=2)).isoformat(),
         }
         
-        success, message = add_event_to_google_calendar(test_event)
-        if success:
-            return f"✅ **Test successful!** {message}"
+        creds = get_credentials()
+        if creds:
+            success, message = add_event_to_google_calendar(test_event, creds)
+            if success:
+                return f"✅ **Test successful!** {message}"
+            else:
+                return f"❌ **Test failed:** {message}"
         else:
-            return f"❌ **Test failed:** {message}"
+            return "❌ **Test failed:** Google Calendar authentication required"
     except Exception as e:
         return f"❌ **Test error:** {str(e)}"
 
@@ -280,15 +291,15 @@ def get_google_auth_prompt():
     """
 
 def clear_authentication():
-    """Clear saved authentication tokens"""
+    """Clear saved authentication tokens and any related session state."""
     try:
-        if os.path.exists('token.json'):
-            os.remove('token.json')
         if os.path.exists('token.pickle'):
             os.remove('token.pickle')
-        return "Authentication cleared successfully."
+        # Clear any other session-related auth flags if they exist
+        st.session_state.pop('google_auth_creds', None)
+        st.success("Authentication cleared. You will be asked to grant access again.")
     except Exception as e:
-        return f"Error clearing authentication: {str(e)}"
+        st.error(f"Error clearing authentication: {str(e)}")
 
 def clear_cached_status():
     """Clear any cached status - this is a no-op for our implementation"""
@@ -442,21 +453,7 @@ def handle_user_input(question):
         if "EvNtSeArCh" in latest_bot_message.content:
             # Get events and replace the placeholder
             events = search_ticketmaster_events("")[0]
-            # if events:
-                # event_lines = []
-                # for e in events:
-                    # name = e.get('name', 'Unknown')
-                    # start = e.get('dates', {}).get('start', {}).get('localDate', 'Unknown')
-                    # venue = e.get('_embedded', {}).get('venues', [{}])[0].get('name', 'Unknown')
-                    # event_lines.append(f"• {name} — {start} at {venue}")
-                # event_message = "\n".join(event_lines)
-                # print("kk ", event_message)
-            # else:
-                # event_message = "No events found at this time."
-            
-            # Replace the placeholder with actual events
-            # for i in search_ticketmaster_events("")[0]:
-                # print(i)
+
             event_message = "<br>" + "<br> * ".join(events) + "<br>"
             loc = latest_bot_message.content.find("EvNtSeArCh")
             latest_bot_message.content = latest_bot_message.content.replace("EvNtSeArCh", event_message)
@@ -465,51 +462,27 @@ def handle_user_input(question):
         if "AdD_CaL" in latest_bot_message.content:
             events = search_ticketmaster_events("")[0]
             
-            has_access, status = check_google_calendar_access()
-            
-            if has_access:
-                calendar_result = add_events_to_calendar(events, "google")
+            creds = get_credentials()
+
+            if creds:
+                # If we have credentials, proceed to add the event.
+                with st.spinner("Adding events to Google Calendar..."):
+                    calendar_result = add_events_to_calendar(events, "google", creds=creds)
+
                 if "Successfully added" in calendar_result:
-                    calendar_result = f"✅ **Events added to Google Calendar!**\n\n{calendar_result}"
+                    final_message = f"✅ **Events added to Google Calendar!**\n\n{calendar_result}"
                 else:
-                    calendar_result = f"❌ **Failed to add events.**\n\nGoogle Calendar reported an error: {calendar_result}"
-                
-                latest_bot_message.content = latest_bot_message.content.replace("AdD_CaL", "").strip()
-                latest_bot_message.content += f"\n\n---\n\n{calendar_result}"
+                    final_message = f"❌ **Failed to add events.**\n\n**Reason:** {calendar_result}"
             else:
-                # If access fails, check if it's an authentication issue.
-                if ("authentication required" in status.lower() or 
-                    "timed out" in status.lower() or
-                    "access error" in status.lower() or
-                    "token expired" in status.lower()):
-                    
-                    # Store the events and set the flag to trigger OAuth in the main loop.
-                    st.session_state.events_to_add = events
-                    st.session_state.trigger_oauth = True
-                    
-                    # Inform the user that we are starting the authentication process.
-                    latest_bot_message.content = latest_bot_message.content.replace("AdD_CaL", "").strip()
-                    latest_bot_message.content += (
-                        "\n\n---\n\n"
-                        "🔐 **Google Calendar Authentication Required.**\n\n"
-                        "I will now open a browser tab for you to grant access. Please follow the instructions there."
-                    )
-                else:
-                    # For other errors (like setup needed), provide guidance and a fallback.
-                    calendar_result = (
-                        f"⚠️ **Google Calendar Issue:** {status}\n\n"
-                        "Please check your setup or use the sidebar button."
-                    )
-                    ical_result = add_events_to_calendar(events, "ical")
-                    if "Successfully created iCal file:" in ical_result:
-                        file_path = ical_result.split(": ")[1].split(". You can")[0]
-                        st.session_state.ical_file_path = file_path
-                        calendar_result += (
-                            f"\n\nIn the meantime, I've saved the events as an iCal file, "
-                            f"which you can download from the sidebar."
-                        )
-                    latest_bot_message.content = latest_bot_message.content.replace("AdD_CaL", "").strip()
-                    latest_bot_message.content += f"\n\n---\n\n{calendar_result}"
+                # If authentication is required, set flags to trigger the auth flow.
+                st.session_state.events_to_add = events
+                st.session_state.pending_calendar_add = True
+                st.session_state.trigger_auth_flow = True
+                
+                final_message = "First, I need access to your calendar. Please follow the authentication steps, and I'll add the events for you right after."
+
+            latest_bot_message.content = latest_bot_message.content.replace("AdD_CaL", "").strip()
+            latest_bot_message.content += f"\n\n---\n\n{final_message}"
 
     
     # Update the session state chat history with the full conversation
@@ -563,36 +536,23 @@ def main():
         initial_sidebar_state='expanded'
     )
 
-    # Post-OAuth Flow: This runs first when the script reloads after Google auth.
-    if os.path.exists(".temp_session.json"):
-        with st.spinner("Finalizing calendar connection..."):
-            restore_session_state()
+    # Post-authentication logic: check if a task was pending
+    if st.session_state.get('pending_calendar_add'):
+        creds = get_credentials()
+        if creds:
             events_to_add = st.session_state.get('events_to_add', [])
-
             if events_to_add:
-                st.success("✅ Authentication successful! Adding events to your calendar...")
-                calendar_result = add_events_to_calendar(events_to_add, "google")
-                if "Successfully added" in calendar_result:
-                    st.session_state.chat_history.append(AIMessage(content=f"✅ **Events added to Google Calendar!**\n\n{calendar_result}"))
-                else:
-                    st.session_state.chat_history.append(AIMessage(content=f"❌ **Failed to add events after authentication.**\n\n**Reason:** {calendar_result}"))
-                
-                if 'events_to_add' in st.session_state:
-                    del st.session_state.events_to_add  # Clean up
-
-    # In-App OAuth Trigger: This runs when the chat or a button sets the 'trigger_oauth' flag.
-    if st.session_state.get('trigger_oauth', False):
-        st.session_state.trigger_oauth = False  # Reset the flag immediately
-
-        with st.spinner("🔐 Opening Google sign-in page..."):
-            save_session_state()  # Save state right before redirecting
-            success, message = initiate_oauth_flow()
+                with st.spinner("Completing post-authentication task: Adding events..."):
+                    calendar_result = add_events_to_calendar(events_to_add, "google", creds=creds)
+                    if "Successfully added" in calendar_result:
+                        st.success(f"Events added to Google Calendar! {calendar_result}")
+                    else:
+                        st.error(f"Failed to add events after authentication. Reason: {calendar_result}")
             
-            # This part only runs if the flow fails without a redirect (e.g., credentials.json is missing).
-            if not success:
-                 st.error(f"Authentication failed to start: {message}")
-                 restore_session_state() # Restore state to show chat history
-        st.rerun()
+            # Clean up session state flags
+            del st.session_state.pending_calendar_add
+            if 'events_to_add' in st.session_state:
+                del st.session_state.events_to_add
 
     # Force dark mode
     st.markdown("""
@@ -675,6 +635,12 @@ def main():
                 formatted_message = convert_newlines_to_html(message.content)
                 st.write(bot_template.replace("{{MSG}}", formatted_message), unsafe_allow_html=True)
 
+    # Trigger the authentication flow if requested by the app logic
+    if st.session_state.get('trigger_auth_flow'):
+        del st.session_state.trigger_auth_flow  # Consume the flag
+        run_auth_flow()
+        st.rerun()
+
     with st.sidebar:
         st.subheader("Upload your Documents Here: ")
         pdf_files = st.file_uploader("Choose your PDF Files and Press OK", type=['pdf'], accept_multiple_files=True)
@@ -743,9 +709,7 @@ def main():
         
         # Add clear authentication button
         if st.button("🗑️ Clear Authentication", help="Force clear all saved authentication"):
-            st.write("🗑️ **DEBUG**: Clearing all authentication...")
-            clear_message = force_clear_authentication()
-            st.success("✅ Authentication cleared! You'll need to re-authenticate.")
+            clear_authentication()
             st.rerun()
         
         # Add regenerate credentials button
@@ -779,64 +743,28 @@ def main():
                     st.json(parsed)
         
         # Check Google Calendar access status
-        has_access, status = check_google_calendar_access()
-        
-        if has_access:
-            st.success("✅ Google Calendar is ready to use!")
-            st.info("Events will be automatically added to your Google Calendar when you agree to add them.")
-            st.info("💡 **Note**: Your authentication will persist across sessions. You won't need to re-authenticate unless the token expires.")
+        creds = get_credentials()
+        if creds:
+            st.success("✅ Google Calendar is connected!")
+            st.info("You can now add events directly to your calendar from the chat.")
         else:
-            # Show appropriate message based on status
-            if "setup required" in status.lower():
-                st.error("🔧 Google Calendar setup required")
-                with st.expander("📋 Setup Instructions"):
-                    st.markdown(get_google_auth_prompt())
-            elif ("authentication required" in status.lower() or 
-                  "token expired" in status.lower() or 
-                  "not connected" in status.lower() or
-                  "timed out" in status.lower() or
-                  "access error" in status.lower() or
-                  "permissions insufficient" in status.lower() or
-                  "re-authenticate" in status.lower()):
-                
-                # Special handling for insufficient permissions
-                if "permissions insufficient" in status.lower():
-                    st.error("🔐 Google Calendar permissions insufficient")
-                    st.warning("Your Google account is connected but doesn't have calendar permissions. This usually happens when the OAuth flow didn't request calendar access.")
-                    
-                    # Add clear authentication button for this specific case
-                    if st.button("🗑️ Clear & Re-authenticate", type="secondary", help="Clear current authentication and start fresh OAuth"):
-                        force_clear_authentication()
-                        st.success("✅ Authentication cleared! Please use the 'Grant Calendar Access' button below to re-authenticate with proper calendar permissions.")
-                        st.rerun()
-                    
-                    st.info("💡 **Solution**: Clear your current authentication and re-authenticate to grant proper calendar permissions.")
-                
-                st.warning("🔐 Google Calendar authentication required")
-                
-                # Add authentication button with better styling
-                auth_col1, auth_col2 = st.columns([1, 2])
-                with auth_col1:
-                    if st.button("🔐 Grant Calendar Access", type="primary"):
-                        # Set the flag to trigger the OAuth flow in the main loop.
-                        st.session_state.trigger_oauth = True
-                        st.rerun()
-                
-                with auth_col2:
-                    st.info("💡 **Pro tip**: Set up authentication now so events can be added instantly when you need them!")
-                
-                # Show additional help
-                with st.expander("🔧 Need help with OAuth?"):
-                    st.markdown("""
-                    **If you're getting redirect_uri_mismatch errors:**
-                    1. Wait 2-3 minutes for Google Cloud changes to apply
-                    2. Or run: `python quick_fix_web_client.py` for guided setup
-                    3. Or run: `python create_desktop_credentials.py` for new desktop credentials
-                    """)
-            else:
-                st.error(f"❌ Google Calendar issue: {status}")
-                with st.expander("📋 Setup Instructions"):
-                    st.markdown(get_google_auth_prompt())
+            st.warning("🔐 Google Calendar not connected.")
+            
+            # Add authentication button with better styling
+            if st.button("🔐 Grant Calendar Access", type="primary"):
+                run_auth_flow()
+                st.rerun()
+            
+            st.info("💡 **Pro tip**: Connect your calendar so events can be added instantly when you need them!")
+            
+            # Show additional help
+            with st.expander("🔧 Need help with OAuth?"):
+                st.markdown("""
+                **If you're getting redirect_uri_mismatch errors:**
+                1. Wait 2-3 minutes for Google Cloud changes to apply
+                2. Or run: `python quick_fix_web_client.py` for guided setup
+                3. Or run: `python create_desktop_credentials.py` for new desktop credentials
+                """)
         
         # Show fallback information
         st.info("💡 **Fallback**: If Google Calendar is unavailable, events will be saved as downloadable iCal files.")
