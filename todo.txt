@@ -1,0 +1,4 @@
+User feedback
+Vector Database
+AI prompting itself with event data so that it can access it
+    pass it details and description of data

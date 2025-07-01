@@ -23,6 +23,38 @@ import webbrowser
 import requests
 from langchain.schema import AIMessage, HumanMessage
 from google.auth.exceptions import RefreshError
+from langchain.schema.retriever import BaseRetriever
+from langchain.callbacks.manager import CallbackManagerForRetrieverRun
+from langchain.schema import Document
+from typing import List, Callable
+
+# Custom Retriever for injecting event data
+class EventInjectingRetriever(BaseRetriever):
+    """A custom retriever that injects real-time event information into the context."""
+    vectorstore_retriever: BaseRetriever
+    event_fetcher: Callable[..., List[str]]
+
+    def _get_relevant_documents(self, query: str, *, run_manager: CallbackManagerForRetrieverRun) -> List[Document]:
+        """Overrides the default method to add event context when needed."""
+        # First, get the relevant documents from the underlying vector store.
+        docs = self.vectorstore_retriever.get_relevant_documents(query, callbacks=run_manager.get_child())
+
+        # Next, check if the user is asking about events.
+        event_keywords = ["event", "concert", "show", "game", "happen"]
+        if any(keyword in query.lower() for keyword in event_keywords):
+            # If so, fetch the events using the provided function.
+            with st.spinner("Finding local events..."):
+                events = self.event_fetcher("")[0]
+            
+            if events:
+                # Format the events into a string and create a special Document.
+                event_list_str = "\n".join(events)
+                event_doc = Document(page_content=f"\n\nReal-time Events:\n---\n{event_list_str}\n---")
+                
+                # Prepend the event document to the context for the LLM.
+                docs.insert(0, event_doc)
+        
+        return docs
 
 # Calendar integration constants and functions
 SCOPES = ['https://www.googleapis.com/auth/calendar']
@@ -365,14 +397,11 @@ def get_conversation_chain(vector_store):
     template = """You are a helpful AI assistant that answers questions based on the provided context. 
     Use the following pieces of context to answer the question at the end.
     If you don't know the answer, just say that you don't know, don't try to make up an answer.
+    
+    If the user asks about events, use the "Real-time Events" list provided in the context to answer them.
+    Present the events in a clear, user-friendly format. If the list is empty, kindly inform the user that you couldn't find any events.
+    After presenting the events, please ask the user if they would like to have them added to their calendar.
 
-🔹 IMPORTANT: If the user asks you or ask if you could find events, continue the conversation as usual, addressing the user's query with full context, and naturally insert " EvNtSeArCh " where appropriate in the response. Please treat " EvNtSeArCh " as a placeholder for the events(this means that the events will appear where the placeholder is Ex. here are the events: " EvNtSeArCh " = here are the events: Alonzo Ball - 2025-06-24 at 10:00 AM at Honolulu, HI ).
-    Before adding " EvNtSeArCh " make sure to always proceed it with something along the lines of "Here are the events I found for you" or "Here are the events coming up in your location" or something similar.
-🔸 You may skip asking follow-up questions like "Would you like me to search for events?" in this case.
-    - Only return events if they are happening in the future.
-    - If the user doesnt prompt for a search but expresses interest in events ensure to ask them if they would like you to search for related local events coming up at the end of your response. DO not ask questions about the events. The only question related to the events you should ask is the one states before.
-    - Ensure you are not confusing projects with events. Events are scheduled gathers, they are not indefinite constructs.m
-    - After you return the events, end your message with something related to the conversation and ask if the user would like to add the events to their calendar. If the user agrees to this just add " AdD_CaL " to the end of your message. The system will automatically try to add events to their Google Calendar first, and if that fails, it will save them as a downloadable file.
     - Warm Welcome:
     - Begin with a warm, friendly greeting using "Aloha." Inquire about the user's well-being with genuine empathy.
     - If the user asks a question in the first message make sure to answer it as normal following your greeting.
@@ -424,9 +453,16 @@ def get_conversation_chain(vector_store):
 
     memory = ConversationBufferMemory(memory_key='chat_history', return_messages=True)
 
+    # Create the custom retriever
+    vector_store_retriever = vector_store.as_retriever()
+    event_retriever = EventInjectingRetriever(
+        vectorstore_retriever=vector_store_retriever,
+        event_fetcher=search_ticketmaster_events
+    )
+
     conversation_chain = ConversationalRetrievalChain.from_llm(
         llm = llm,
-        retriever = vector_store.as_retriever(),
+        retriever = event_retriever,
         memory = memory,
         combine_docs_chain_kwargs={"prompt": QA_CHAIN_PROMPT}
     )
@@ -441,56 +477,46 @@ def handle_user_input(question):
     if st.session_state.conversation is None:
         st.error("Please upload and process your PDFs first!")
         return
-    
-    # Add user message to chat history
+
+    # Always add the user's message to history first.
     st.session_state.chat_history.append(HumanMessage(content=question))
-    
+
+    # Check if the user is confirming to add events to the calendar.
+    confirmation_keywords = ["yes", "sure", "ok", "yep", "add them", "please do", "sounds good"]
+    if any(keyword in question.lower() for keyword in confirmation_keywords):
+        if len(st.session_state.chat_history) > 1:
+            # Check if the last bot message was a question about adding events.
+            last_bot_message = st.session_state.chat_history[-2] # User's msg is last, bot's is second-to-last
+            if isinstance(last_bot_message, AIMessage) and "add" in last_bot_message.content.lower() and "calendar" in last_bot_message.content.lower():
+                # The user confirmed. Trigger the calendar workflow.
+                with st.spinner("Accessing your calendar..."):
+                    events = search_ticketmaster_events("")[0]
+                    creds = get_credentials()
+                    
+                    if creds:
+                        calendar_result = add_events_to_calendar(events, "google", creds=creds)
+                        response_message = f"Great! I've added those to your calendar. Here's the summary: {calendar_result}"
+                    else:
+                        st.session_state.events_to_add = events
+                        st.session_state.pending_calendar_add = True
+                        st.session_state.trigger_auth_flow = True
+                        response_message = "To add events, I need access to your calendar. Please follow the steps to grant permission, and I'll add them right after."
+                
+                # Add the final confirmation message from the AI and stop processing.
+                st.session_state.chat_history.append(AIMessage(content=response_message))
+                st.rerun()
+                return
+
     response = st.session_state.conversation({'question':question})
     
-    # Process EvNtSeArCh replacement in the latest bot response
+    # The new logic for handling events is now part of the prompt,
+    # so the old post-processing block is no longer needed.
     if response['chat_history']:
-        latest_bot_message = response['chat_history'][-1]  # Last message is the bot's response
-        if "EvNtSeArCh" in latest_bot_message.content:
-            # Get events and replace the placeholder
-            events = search_ticketmaster_events("")[0]
-
-            event_message = "<br>" + "<br> * ".join(events) + "<br>"
-            loc = latest_bot_message.content.find("EvNtSeArCh")
-            latest_bot_message.content = latest_bot_message.content.replace("EvNtSeArCh", event_message)
-
-        # Handle calendar integration when "AdD_CaL" is detected
-        if "AdD_CaL" in latest_bot_message.content:
-            events = search_ticketmaster_events("")[0]
-            
-            creds = get_credentials()
-
-            if creds:
-                # If we have credentials, proceed to add the event.
-                with st.spinner("Adding events to Google Calendar..."):
-                    calendar_result = add_events_to_calendar(events, "google", creds=creds)
-
-                if "Successfully added" in calendar_result:
-                    final_message = f"✅ **Events added to Google Calendar!**\n\n{calendar_result}"
-                else:
-                    final_message = f"❌ **Failed to add events.**\n\n**Reason:** {calendar_result}"
-            else:
-                # If authentication is required, set flags to trigger the auth flow.
-                st.session_state.events_to_add = events
-                st.session_state.pending_calendar_add = True
-                st.session_state.trigger_auth_flow = True
-                
-                final_message = "First, I need access to your calendar. Please follow the authentication steps, and I'll add the events for you right after."
-
-            latest_bot_message.content = latest_bot_message.content.replace("AdD_CaL", "").strip()
-            latest_bot_message.content += f"\n\n---\n\n{final_message}"
-
+        # The response object contains the full history, including the latest AI message.
+        # We replace our session state history with this to keep it in sync.
+        st.session_state.chat_history = response['chat_history']
     
-    # Update the session state chat history with the full conversation
-    st.session_state.chat_history = response['chat_history']
-
-    # If OAuth is triggered, we need to rerun immediately to start the flow.
-    if st.session_state.get('trigger_oauth', False):
-        st.rerun()
+    st.rerun()
 
 def clear_chat():
     """Clear chat history and reset initial greeting"""
