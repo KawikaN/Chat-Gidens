@@ -26,13 +26,7 @@ from google.auth.exceptions import RefreshError
 from langchain.schema.retriever import BaseRetriever
 from langchain.callbacks.manager import CallbackManagerForRetrieverRun
 from langchain.schema import Document
-from typing import List, Callable, Dict
-import shutil
-
-# --- Data Store Constants ---
-PDF_STORAGE_PATH = "data_store/pdfs/"
-VECTOR_STORE_PATH = "data_store/faiss_index/"
-METADATA_FILE = "data_store/metadata.json"
+from typing import List, Callable
 
 # Custom Retriever for injecting event data
 class EventInjectingRetriever(BaseRetriever):
@@ -360,145 +354,39 @@ def generate_credentials_from_env():
     except Exception as e:
         return False
 
-def get_pdf_text(pdf_path):
+def get_pdf_text(pdf_files):
     
     text = ""
-    reader = PdfReader(pdf_path)
-    for page in reader.pages:
-        page_text = page.extract_text()
-        if page_text:
-            text += page_text
+    for pdf_file in pdf_files:
+        reader = PdfReader(pdf_file)
+        for page in reader.pages:
+            text = page.extract_text()
     return text
 
-def get_chunk_text(text, pdf_name):
+def get_chunk_text(text):
     text_splitter = CharacterTextSplitter(
-        separator="\n",
-        chunk_size=1000,
-        chunk_overlap=200,
-        length_function=len
+        separator = "\n",
+        chunk_size = 4000,
+        chunk_overlap = 400,
+        length_function = len
     )
-    chunks = text_splitter.create_documents([text])
-    for i, chunk in enumerate(chunks):
-        chunk.metadata = {"source": f"{pdf_name}-chunk-{i}"}
+
+    chunks = text_splitter.split_text(text)
     return chunks
 
-def initialize_vector_store():
-    """Load the existing vector store or create a new one if it doesn't exist."""
-    if os.path.exists(os.path.join(VECTOR_STORE_PATH, "index.faiss")):
-        try:
-            return FAISS.load_local(VECTOR_STORE_PATH, OpenAIEmbeddings(), allow_dangerous_deserialization=True)
-        except Exception as e:
-            st.error(f"Failed to load vector store: {e}. Re-creating...")
-            # If loading fails, we can try to rebuild it.
-            # For simplicity, we'll just delete and let it be re-created empty.
-            shutil.rmtree(VECTOR_STORE_PATH)
-            os.makedirs(VECTOR_STORE_PATH, exist_ok=True)
-    
-    # Create and save an empty vector store if it doesn't exist
-    dummy_embeddings = OpenAIEmbeddings()
-    dummy_vector_store = FAISS.from_texts([""], dummy_embeddings)
-    dummy_vector_store.save_local(VECTOR_STORE_PATH)
-    return dummy_vector_store
+def process_pdfs_in_batches(pdf_files, batch_size=10):
+    all_chunks = []
+    for i in range(0, len(pdf_files), batch_size):
+        batch = pdf_files[i:i + batch_size]
+        raw_text = get_pdf_text(batch)
+        chunks = get_chunk_text(raw_text)
+        all_chunks.extend(chunks)
+    return all_chunks
 
-def add_pdfs_to_store(pdf_files):
-    """Process uploaded PDFs and add them to the persistent store."""
-    if not pdf_files:
-        return
-
-    vector_store = initialize_vector_store()
-    metadata = load_metadata()
-
-    with st.spinner("Processing and adding PDFs to the knowledge base..."):
-        for pdf_file in pdf_files:
-            pdf_name = pdf_file.name
-            if pdf_name in metadata:
-                st.warning(f"'{pdf_name}' already exists in the data store. Skipping.")
-                continue
-
-            # Save the PDF
-            pdf_path = os.path.join(PDF_STORAGE_PATH, pdf_name)
-            with open(pdf_path, "wb") as f:
-                f.write(pdf_file.getbuffer())
-
-            # Process the PDF
-            raw_text = get_pdf_text(pdf_path)
-            if not raw_text:
-                st.warning(f"Could not extract text from '{pdf_name}'. Skipping.")
-                continue
-            
-            text_chunks = get_chunk_text(raw_text, pdf_name)
-            
-            # Add to vector store and get IDs
-            try:
-                doc_ids = vector_store.add_documents(text_chunks, return_ids=True)
-                vector_store.save_local(VECTOR_STORE_PATH)
-
-                # Update metadata
-                metadata[pdf_name] = doc_ids
-                save_metadata(metadata)
-                st.success(f"Successfully added '{pdf_name}' to the data store.")
-            except Exception as e:
-                st.error(f"Error adding '{pdf_name}' to vector store: {e}")
-
-    # Reload the conversation chain with the updated vector store
-    initialize_conversation()
-    st.rerun()
-
-def get_vector_store():
-    return initialize_vector_store()
-
-def initialize_data_store():
-    """Create necessary directories if they don't exist."""
-    os.makedirs(PDF_STORAGE_PATH, exist_ok=True)
-    os.makedirs(VECTOR_STORE_PATH, exist_ok=True)
-
-def load_metadata() -> Dict[str, List[str]]:
-    """Load the metadata file that maps PDF names to vector IDs."""
-    if os.path.exists(METADATA_FILE):
-        with open(METADATA_FILE, 'r') as f:
-            return json.load(f)
-    return {}
-
-def save_metadata(metadata: Dict[str, List[str]]):
-    """Save the metadata file."""
-    with open(METADATA_FILE, 'w') as f:
-        json.dump(metadata, f, indent=4)
-
-def remove_pdf_from_store(pdf_name: str):
-    """Remove a PDF and its vectors from the store."""
-    metadata = load_metadata()
-    if pdf_name not in metadata:
-        st.error(f"'{pdf_name}' not found in the data store.")
-        return
-
-    # 1. Remove from FAISS index
-    try:
-        vector_store = FAISS.load_local(VECTOR_STORE_PATH, OpenAIEmbeddings(), allow_dangerous_deserialization=True)
-        doc_ids_to_remove = metadata[pdf_name]
-        
-        if doc_ids_to_remove:
-            vector_store.delete(doc_ids_to_remove)
-            vector_store.save_local(VECTOR_STORE_PATH)
-            st.success(f"Removed {len(doc_ids_to_remove)} document chunks for '{pdf_name}'.")
-
-    except Exception as e:
-        st.error(f"Error removing from vector store: {e}")
-        # Continue to ensure metadata and file are still removed
-
-    # 2. Remove from metadata
-    del metadata[pdf_name]
-    save_metadata(metadata)
-
-    # 3. Remove from PDF storage
-    pdf_path = os.path.join(PDF_STORAGE_PATH, pdf_name)
-    if os.path.exists(pdf_path):
-        os.remove(pdf_path)
-    
-    st.success(f"Successfully removed '{pdf_name}' from the data store.")
-    
-    # Reload the conversation chain with the updated vector store
-    initialize_conversation()
-    st.rerun()
+def get_vector_store(text_chunks):
+    embeddings = OpenAIEmbeddings()
+    vectorstore = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
+    return vectorstore
 
 def get_conversation_chain(vector_store):
     
@@ -580,18 +468,6 @@ def get_conversation_chain(vector_store):
     )
 
     return conversation_chain
-
-def initialize_conversation():
-    """Initialize the conversation chain and store it in session state."""
-    vector_store = get_vector_store()
-    st.session_state.conversation = get_conversation_chain(vector_store)
-    
-    if 'chat_history' not in st.session_state:
-        st.session_state.chat_history = []
-    
-    # Sync conversation memory with chat history if it exists
-    if st.session_state.chat_history:
-        st.session_state.conversation.memory.chat_memory.messages = st.session_state.chat_history.copy()
 
 def convert_newlines_to_html(text):
     """Convert newlines to HTML line breaks for proper display"""
@@ -686,9 +562,6 @@ def main():
         initial_sidebar_state='expanded'
     )
 
-    # Initialize data store directories
-    initialize_data_store()
-
     # Post-authentication logic: check if a task was pending
     if st.session_state.get('pending_calendar_add'):
         creds = get_credentials()
@@ -729,10 +602,8 @@ def main():
             st.session_state.session_restored = True
             st.success("✅ Session restored successfully!")
     
-    # Initialize conversation chain if not already done
     if "conversation" not in st.session_state:
         st.session_state.conversation = None
-        initialize_conversation()
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
@@ -800,26 +671,22 @@ def main():
         st.subheader("Upload your Documents Here: ")
         pdf_files = st.file_uploader("Choose your PDF Files and Press OK", type=['pdf'], accept_multiple_files=True)
 
-        if pdf_files:
-            add_pdfs_to_store(pdf_files)
+        if st.button("OK"):
+            with st.spinner("Processing your PDFs..."):
+                # Process PDFs in batches
+                text_chunks = process_pdfs_in_batches(pdf_files)
+                
+                # Create Vector Store
+                vector_store = get_vector_store(text_chunks)
+                st.write("DONE")
 
-        st.subheader("Manage Knowledge Base")
-        
-        metadata = load_metadata()
-        stored_pdfs = list(metadata.keys())
-
-        if not stored_pdfs:
-            st.info("No PDFs have been added yet.")
-        else:
-            st.write("Current PDFs in the knowledge base:")
-            for pdf_name in stored_pdfs:
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    st.write(f"📄 {pdf_name}")
-                with col2:
-                    if st.button("🗑️", key=f"del_{pdf_name}", help=f"Remove {pdf_name}"):
-                        with st.spinner(f"Removing '{pdf_name}'..."):
-                            remove_pdf_from_store(pdf_name)
+                # Create conversation chain
+                talk = get_conversation_chain(vector_store)
+                st.session_state.conversation = talk
+                
+                # Set the conversation's memory to include the initial greeting
+                if st.session_state.chat_history:
+                    st.session_state.conversation.memory.chat_memory.messages = st.session_state.chat_history.copy()
 
         if st.button("Clear Chat"):
             clear_chat()
