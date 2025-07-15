@@ -30,16 +30,16 @@ def search_events(event_type: str):
     return list, events
 
 
-def search_ticketmaster_events(event_type: str):
+def search_ticketmaster_events(event_type: str, city, start_date, end_date):
     list = []
     api_key = "t1olQhHOzw8OSkI6CkPUpiu7INqmsbke"
     url = "https://app.ticketmaster.com/discovery/v2/events.json"
     params = {
         "apikey": api_key,
         "keyword": event_type,
-        "city": "Honolulu",
-        "startDateTime": "2025-06-23T00:00:00Z",
-        "endDateTime": "2025-07-10T23:59:59Z",
+        "city": city,
+        "startDateTime": start_date,
+        "endDateTime": end_date,
         "size": 20
     }
     response = requests.get(url, params=params)
@@ -120,3 +120,4 @@ def search_Allevents_events(latitude, longitude, radius):
 # print(search_ticketmaster_events("")[0])
 # event_message = "\n".join(search_ticketmaster_events("")[0])
 # print(event_message[0])
+# print(search_ticketmaster_events("")[0])

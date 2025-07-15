@@ -14,8 +14,9 @@ openai>=1.12.0
 # PDF processing
 PyPDF2>=3.0.1
 
-# Vector storage
-faiss-cpu>=1.7.4
+# Vector Store - Using ChromaDB for lightweight, persistent storage
+chromadb>=0.4.22
+# faiss-cpu>=1.7.4 # No longer needed, replaced by ChromaDB
 
 # Google Calendar integration
 google-auth>=2.22.0
