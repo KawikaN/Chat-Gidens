@@ -1,9 +1,11 @@
 # Environment variables
 .env
+.env.example
 
 # Google OAuth credentials (generated from environment variables)
 credentials.json
 token.pickle
+token.json
 
 # Python
 __pycache__/
@@ -52,3 +54,6 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+.env
+.env
+.env
