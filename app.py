@@ -10,6 +10,9 @@ from langchain.chat_models import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from htmlTemplates import bot_template, user_template, css
 from events import search_ticketmaster_events
+# Enhanced event management imports
+from enhanced_events import EnhancedEventManager, enhanced_search_events, format_events_for_chat, unified_event_search, ISLAND_CITY_MAP
+from enhanced_topic_search import EnhancedEventConversationFlow, integrate_enhanced_events_with_existing_flow
 # Calendar integration imports
 from calendarTest import (
     get_credentials,
@@ -153,6 +156,402 @@ Respond with the appropriate format:"""
         print(f"LLM classification failed: {e}")
         return None
 
+# --- Manual Event Creator ---
+class ManualEventCreator:
+    """Manages the conversation flow for manually creating calendar events."""
+
+    def __init__(self):
+        if 'manual_event_state' not in st.session_state:
+            st.session_state.manual_event_state = {
+                "creating_event": False,
+                "event_data": {},
+                "awaiting_field": None,
+                "original_query": None,
+            }
+
+    @property
+    def state(self):
+        return st.session_state.manual_event_state
+
+    def is_manual_event_query(self, query: str) -> bool:
+        """Check if a query is asking to create a manual event."""
+        query_lower = query.lower()
+        
+        # Keywords that indicate manual event creation
+        create_keywords = [
+            "create event", "add event", "make event", "schedule event",
+            "create appointment", "add appointment", "schedule appointment",
+            "add to calendar", "put in calendar", "create calendar event",
+            "schedule meeting", "book appointment", "set reminder",
+            "add an event", "create an event", "make an event",
+            "schedule an event", "book an event", "plan an event"
+        ]
+        
+        # Check for exact matches first (highest priority)
+        if any(keyword in query_lower for keyword in create_keywords):
+            return True
+        
+        # Check for patterns with creation verbs followed by event-related words
+        creation_verbs = ["create", "add", "make", "schedule", "book", "plan", "set"]
+        event_words = ["event", "appointment", "meeting", "reminder", "calendar"]
+        
+        # Split query into words
+        words = query_lower.split()
+        
+        # Look for creation verb + event word pattern
+        for i, word in enumerate(words):
+            if word in creation_verbs:
+                # Check if an event word appears within next few words
+                for j in range(i+1, min(i+4, len(words))):
+                    if words[j] in event_words:
+                        return True
+        
+        # Check for patterns like "schedule X on Y" or "add X to my calendar" 
+        # where X could be any event name
+        if any(verb in query_lower for verb in creation_verbs):
+            if any(phrase in query_lower for phrase in ["on", "for", "at", "calendar", "tomorrow", "today", "next"]):
+                return True
+             
+        return False
+
+    def start_manual_event_creation(self, query: str):
+        """Initiate the manual event creation flow."""
+        self.state['creating_event'] = True
+        self.state['original_query'] = query
+        self.state['event_data'] = {}
+        
+        # Try to extract information from the initial query
+        extracted_data = self._extract_event_info_from_query(query)
+        self.state['event_data'].update(extracted_data)
+        
+        # Determine what information we still need
+        missing_required = self._get_missing_required_fields()
+        
+        if missing_required:
+            # Ask for the first missing required field
+            return self._prompt_for_field(missing_required[0])
+        else:
+            # We have all required info, ask for optional details or confirm
+            return self._offer_optional_details_or_confirm()
+
+    def _extract_event_info_from_query(self, query: str) -> dict:
+        """Extract event information from the user's query using LLM."""
+        try:
+            from langchain.chat_models import ChatOpenAI
+            llm = ChatOpenAI(temperature=0)
+            
+            extraction_prompt = f"""Extract event information from this user request: "{query}"
+
+Extract the following information if present:
+- name: Event title/name
+- date: Date in YYYY-MM-DD format (if relative like "tomorrow", convert to actual date)
+- time: Time in HH:MM format (24-hour)
+- description: Any additional details
+
+Current date for reference: {datetime.datetime.now().strftime("%Y-%m-%d")}
+
+Respond ONLY with a JSON object containing the extracted information. If information is not present, omit that field.
+Example: {{"name": "Meeting with John", "date": "2024-01-15", "time": "14:30", "description": "Discuss project updates"}}
+
+If you cannot extract any clear information, respond with: {{}}"""
+
+            response = llm.predict(extraction_prompt).strip()
+            
+            # Try to parse JSON response
+            import json
+            try:
+                return json.loads(response)
+            except json.JSONDecodeError:
+                return {}
+                
+        except Exception as e:
+            print(f"Error extracting event info: {e}")
+            return {}
+
+    def _get_missing_required_fields(self) -> list:
+        """Get list of required fields that are missing."""
+        required_fields = ['name', 'date']
+        missing = []
+        
+        for field in required_fields:
+            if field not in self.state['event_data'] or not self.state['event_data'][field]:
+                missing.append(field)
+                
+        return missing
+
+    def _prompt_for_field(self, field: str) -> str:
+        """Generate a prompt asking for a specific field."""
+        self.state['awaiting_field'] = field
+        
+        prompts = {
+            'name': "What would you like to call this event? Please provide a name or title for your event.",
+            'date': "What date is this event? Please provide the date (you can say 'tomorrow', 'next Friday', or a specific date like 'January 15th' or '2024-01-15').",
+            'time': "What time is this event? Please provide the time (like '2:30 PM' or '14:30'). If you don't specify, I'll default to 7:00 PM.",
+            'description': "Would you like to add any additional details or description for this event?"
+        }
+        
+        return prompts.get(field, f"Please provide the {field} for this event.")
+
+    def _offer_optional_details_or_confirm(self) -> str:
+        """Offer to add optional details or confirm the event creation."""
+        event_summary = self._format_event_summary()
+        
+        if 'time' not in self.state['event_data']:
+            return f"Great! I have the essential information for your event:\n\n{event_summary}\n\nWhat time should this event be? (If you don't specify, I'll default to 7:00 PM)"
+        elif 'description' not in self.state['event_data']:
+            return f"Perfect! Here's your event:\n\n{event_summary}\n\nWould you like to add any additional details or description? Or should I go ahead and add this to your calendar as is?"
+        else:
+            return f"Here's your complete event:\n\n{event_summary}\n\nShould I add this to your calendar? Or would you like to modify anything?"
+
+    def _format_event_summary(self) -> str:
+        """Format the current event data into a readable summary."""
+        data = self.state['event_data']
+        summary_parts = []
+        
+        if 'name' in data:
+            summary_parts.append(f"📅 **Event:** {data['name']}")
+        if 'date' in data:
+            summary_parts.append(f"📆 **Date:** {data['date']}")
+        if 'time' in data:
+            summary_parts.append(f"🕒 **Time:** {data['time']}")
+        if 'description' in data:
+            summary_parts.append(f"📝 **Details:** {data['description']}")
+            
+        return "\n".join(summary_parts)
+
+    def handle_user_response(self, response: str):
+        """Handle the user's response during event creation."""
+        if not self.state['creating_event']:
+            return None
+        
+        awaiting_field = self.state.get('awaiting_field')
+        response_lower = response.lower().strip()
+        
+        # Prevent restarting event creation if already in progress
+        # If user repeats a creation command, treat as confirmation
+        creation_keywords = [
+            "create event", "add event", "make event", "schedule event",
+            "create appointment", "add appointment", "schedule appointment",
+            "add to calendar", "put in calendar", "create calendar event",
+            "schedule meeting", "book appointment", "set reminder",
+            "add an event", "create an event", "make an event",
+            "schedule an event", "book an event", "plan an event"
+        ]
+        if any(kw in response_lower for kw in creation_keywords):
+            # If we're already creating, treat as confirmation
+            return self._create_calendar_event()
+        
+        if awaiting_field:
+            # User is providing information for a specific field
+            if awaiting_field == 'date':
+                parsed_date = self._parse_date_input(response)
+                if parsed_date:
+                    self.state['event_data']['date'] = parsed_date
+                    self.state['awaiting_field'] = None
+                else:
+                    return "I couldn't understand that date. Please try again with a format like 'tomorrow', 'January 15th', or '2024-01-15'."
+            elif awaiting_field == 'time':
+                parsed_time = self._parse_time_input(response)
+                if parsed_time:
+                    self.state['event_data']['time'] = parsed_time
+                    self.state['awaiting_field'] = None
+                else:
+                    return "I couldn't understand that time. Please try again with a format like '2:30 PM' or '14:30'."
+            else:
+                # For name and description, take the response as-is
+                self.state['event_data'][awaiting_field] = response.strip()
+                self.state['awaiting_field'] = None
+            
+            # Check if we need more required fields
+            missing_required = self._get_missing_required_fields()
+            if missing_required:
+                return self._prompt_for_field(missing_required[0])
+            else:
+                return self._offer_optional_details_or_confirm()
+        else:
+            # User is either providing optional details or confirming
+            # Check if user wants to confirm/proceed
+            if any(word in response_lower for word in ['yes', 'add it', 'create it', 'go ahead', 'confirm', 'looks good', 'perfect']):
+                return self._create_calendar_event()
+            # Check if user wants to modify something
+            elif any(word in response_lower for word in ['change', 'modify', 'edit', 'update', 'different']):
+                return "What would you like to change? You can say things like 'change the time to 3 PM' or 'update the name to...'."
+            # Check if user is declining optional details
+            elif any(word in response_lower for word in ['no', 'skip', 'without', "don't need", 'just add it']):
+                return self._create_calendar_event()
+            # Otherwise, treat as additional details or modification
+            else:
+                return self._handle_modification_or_details(response)
+
+    def _parse_date_input(self, date_input: str) -> str:
+        """Parse various date input formats into YYYY-MM-DD."""
+        try:
+            from langchain.chat_models import ChatOpenAI
+            llm = ChatOpenAI(temperature=0)
+            
+            current_date = datetime.datetime.now().strftime("%Y-%m-%d")
+            
+            parse_prompt = f"""Convert this date input to YYYY-MM-DD format: "{date_input}"
+
+Current date: {current_date}
+Current day of week: {datetime.datetime.now().strftime("%A")}
+
+Examples:
+- "tomorrow" → {(datetime.datetime.now() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")}
+- "next Friday" → (calculate next Friday's date)
+- "January 15th" → "2024-01-15" (use current year if not specified)
+- "2024-01-15" → "2024-01-15"
+
+Respond ONLY with the date in YYYY-MM-DD format or "INVALID" if the input cannot be parsed."""
+
+            response = llm.predict(parse_prompt).strip()
+            
+            if response != "INVALID" and len(response) == 10 and response.count('-') == 2:
+                return response
+            else:
+                return None
+                
+        except Exception as e:
+            print(f"Error parsing date: {e}")
+            return None
+
+    def _parse_time_input(self, time_input: str) -> str:
+        """Parse various time input formats into HH:MM format."""
+        try:
+            from langchain.chat_models import ChatOpenAI
+            llm = ChatOpenAI(temperature=0)
+            
+            parse_prompt = f"""Convert this time input to 24-hour HH:MM format: "{time_input}"
+
+Examples:
+- "2:30 PM" → "14:30"
+- "2:30pm" → "14:30"
+- "14:30" → "14:30"
+- "2 PM" → "14:00"
+- "morning" → "09:00"
+- "afternoon" → "14:00"
+- "evening" → "19:00"
+
+Respond ONLY with the time in HH:MM format or "INVALID" if the input cannot be parsed."""
+
+            response = llm.predict(parse_prompt).strip()
+            
+            if response != "INVALID" and len(response) == 5 and response.count(':') == 1:
+                return response
+            else:
+                return None
+                
+        except Exception as e:
+            print(f"Error parsing time: {e}")
+            return None
+
+    def _handle_modification_or_details(self, response: str) -> str:
+        """Handle modifications to existing event data or additional details."""
+        response_lower = response.lower()
+        
+        # Check if this is a modification request
+        if any(word in response_lower for word in ['change', 'time to', 'date to', 'name to', 'call it']):
+            # Try to extract what they want to change using LLM
+            try:
+                from langchain.chat_models import ChatOpenAI
+                llm = ChatOpenAI(temperature=0)
+                
+                current_data = self.state['event_data']
+                
+                modification_prompt = f"""The user wants to modify their event. Current event data: {current_data}
+
+User said: "{response}"
+
+What do they want to change? Respond with JSON containing the field(s) they want to update.
+
+Examples:
+- "change the time to 3 PM" → {{"time": "15:00"}}
+- "update the name to Doctor Appointment" → {{"name": "Doctor Appointment"}}
+- "change date to tomorrow" → {{"date": "2024-01-16"}} (calculate actual date)
+
+Current date for reference: {datetime.datetime.now().strftime("%Y-%m-%d")}
+
+Respond ONLY with valid JSON or {{}} if no clear modification is requested."""
+
+                mod_response = llm.predict(modification_prompt).strip()
+                
+                import json
+                modifications = json.loads(mod_response)
+                
+                if modifications:
+                    self.state['event_data'].update(modifications)
+                    return f"Updated! Here's your event now:\n\n{self._format_event_summary()}\n\nShould I add this to your calendar?"
+                    
+            except Exception as e:
+                print(f"Error processing modification: {e}")
+        
+        # If not a modification, treat as additional description
+        if 'description' not in self.state['event_data']:
+            self.state['event_data']['description'] = response.strip()
+        else:
+            self.state['event_data']['description'] += f" {response.strip()}"
+            
+        return f"Added those details! Here's your complete event:\n\n{self._format_event_summary()}\n\nShould I add this to your calendar?"
+
+    def _create_calendar_event(self) -> str:
+        """Create the calendar event with the collected information."""
+        try:
+            event_data = self.state['event_data'].copy()
+            
+            # Ensure we have required fields
+            if 'name' not in event_data or 'date' not in event_data:
+                return "❌ Missing required information. Please provide at least an event name and date."
+            
+            # Set default time if not provided
+            if 'time' not in event_data:
+                event_data['time'] = "19:00"  # 7 PM default
+            
+            # Parse date and time into datetime objects
+            event_date = event_data['date']
+            event_time = event_data['time']
+            
+            try:
+                event_datetime = datetime.datetime.strptime(f"{event_date} {event_time}", "%Y-%m-%d %H:%M")
+            except ValueError:
+                return "❌ Error parsing date/time. Please check the format and try again."
+            
+            # Create end time (1 hour later by default)
+            end_datetime = event_datetime + datetime.timedelta(hours=1)
+            
+            # Prepare the event for Google Calendar
+            calendar_event = {
+                'summary': event_data['name'],
+                'description': event_data.get('description', f"Event created via Hawaii Business Assistant"),
+                'start': {
+                    'dateTime': event_datetime.isoformat(),
+                    'timeZone': 'Pacific/Honolulu',
+                },
+                'end': {
+                    'dateTime': end_datetime.isoformat(),
+                    'timeZone': 'Pacific/Honolulu',
+                },
+            }
+            
+            # Store the event for calendar addition (using existing calendar logic)
+            st.session_state['manual_event_to_add'] = calendar_event
+            
+            # Reset the manual event state
+            self.reset()
+            
+            return f"✅ Perfect! I've prepared your event '{event_data['name']}' for {event_date} at {event_time}. Adding it to your calendar now..."
+            
+        except Exception as e:
+            return f"❌ Error creating event: {str(e)}"
+
+    def reset(self):
+        """Reset the manual event creation state."""
+        st.session_state.manual_event_state = {
+            "creating_event": False,
+            "event_data": {},
+            "awaiting_field": None,
+            "original_query": None,
+        }
+
 # --- Event Search Manager ---
 class EventSearchManager:
     """Manages the conversation flow for searching events."""
@@ -173,6 +572,11 @@ class EventSearchManager:
 
     def is_event_query(self, query: str) -> bool:
         """Check if a query is asking for events, with typo tolerance."""
+        # First check if this is a manual event creation request - if so, it's NOT an event search
+        manual_event_creator = ManualEventCreator()
+        if manual_event_creator.is_manual_event_query(query):
+            return False
+        
         # Keywords for fuzzy matching (single words are better for this)
         event_keywords = [
             "event", "concert", "show", "game", "find", "music",
@@ -195,6 +599,11 @@ class EventSearchManager:
             return True
 
         # 2. Check for fuzzy matches on single words for typo tolerance
+        # But exclude queries that clearly contain creation/scheduling intent
+        creation_indicators = ["create", "add", "make", "schedule", "book", "plan"]
+        if any(indicator in query_lower for indicator in creation_indicators):
+            return False
+
         query_words = re.findall(r'\b\w+\b', query_lower)  # Split into words, handles punctuation
         for word in query_words:
             # If any word in the query is a close match to our keywords, trigger the search.
@@ -214,7 +623,7 @@ class EventSearchManager:
             
         self.state['awaiting_city'] = True
         self.state['original_query'] = query
-        return "Aloha! To find events for you, I need to know which city you're interested in. Could you please tell me the city?"
+        return "Aloha! To find events for you, I need to know where you're interested in. Could you please tell me the island/city you're interested in?"
 
     def handle_city_response(self, city: str):
         """Handle the user's response providing a city."""
@@ -604,211 +1013,219 @@ def convert_newlines_to_html(text):
     """Convert newlines to HTML line breaks for proper display"""
     return text.replace('\n', '<br>')
 
-def handle_user_input(question):
-    # 1. Initialize conversation chain if it doesn't exist
-    if "conversation_chain" not in st.session_state or st.session_state.conversation_chain is None:
-        initialize_conversation()
+def add_manual_event_to_calendar(calendar_event):
+    """Add a manually created event to Google Calendar using the existing subprocess approach."""
+    try:
+        # Use the same subprocess approach as the other calendar events
+        events_data = [calendar_event]  # Wrap in list for consistency
         
-    # 2. Add user's message to chat history
-    st.session_state.chat_history.append(HumanMessage(content=question))
-
-    event_search_manager = EventSearchManager()
-    is_follow_up_about_events = 'last_found_events' in st.session_state and st.session_state.last_found_events
-
-    # 3. Handle the multi-turn event search flow
-    # Check if this is a response to the "what city?" prompt
-    if event_search_manager.state['awaiting_city']:
-        original_query = event_search_manager.handle_city_response(question)
+        # Create a temporary script to run the calendar operation
+        import tempfile
+        import subprocess
+        import sys
+        import json
         
-        # We now have the city, so we can proceed to fetch events.
-        # The user's message (the city name) has been added to the history.
-        # Now, we'll fetch events and then let the chain formulate the response.
-        question = original_query  # Restore the original query to continue the search
+        script_content = f'''
+import sys
+import os
+import datetime
+import json
 
-    # If it's an event query but we don't have a city, ask for it and stop.
-    # Do not trigger a new search if the user is asking a follow-up question about events we just found.
-    if (event_search_manager.is_event_query(question) or event_search_manager.state['original_query']) and not event_search_manager.state['city'] and not is_follow_up_about_events:
-        response_text = event_search_manager.start_event_search(question)
-        st.session_state.chat_history.append(AIMessage(content=response_text))
-        return  # Exit to display the "what city?" prompt
+# Add current directory to path for imports
+current_dir = os.getcwd()
+sys.path.insert(0, current_dir)
 
-    # 4. Perform the event search if we have the necessary parameters
-    event_params = event_search_manager.get_search_params()
-    if event_params:
-        with st.spinner(f"Finding events in {event_params['city']}..."):
-            try:
-                original_query = event_search_manager.state['original_query'] or question
-                summaries, details = cached_search_ticketmaster_events(original_query, **event_params)
+# Import only what we need to avoid dependency issues
+try:
+    from calendarTest import check_google_calendar_access, initiate_oauth_flow, add_event_to_google_calendar
+except ImportError as e:
+    print(f"RESULT:IMPORT_FAILED:Could not import calendar functions: {{e}}")
+    sys.exit(1)
 
-                # --- DIRECT RESPONSE LOGIC ---
-                # Instead of passing back to the LLM, directly formulate the response.
-                st.session_state.last_found_events = summaries
-                st.session_state.last_found_events_details = details
-                # Also populate the retriever for any true follow-up questions.
-                st.session_state.conversation_chain.retriever.event_list = summaries
-                st.session_state.conversation_chain.retriever.event_details = details
-
-                if summaries and "No Ticketmaster events found" not in summaries[0]:
-                    response_parts = [f"Aloha! I found these events for you in {event_params['city']}:"]
-                    for i, summary in enumerate(summaries):
-                        response_parts.append(f"{i+1}. {summary}")
-                    
-                    response_parts.append("\nWould you like me to add any of these to your calendar?")
-                    response_parts.append("I can also search for events in a different city or over a different time period if you'd like.")
-                    response_message = "\n".join(response_parts)
-                else:
-                    response_message = f"I'm sorry, I couldn't find any events in {event_params['city']} for the next month. Is there another city or time frame you're interested in?"
-
-                st.session_state.chat_history.append(AIMessage(content=response_message))
-
-            except Exception as e:
-                st.error(f"An error occurred while fetching events: {e}")
-                response_message = "I'm sorry, but I ran into an error while trying to find events. Please try again later."
-                st.session_state.chat_history.append(AIMessage(content=response_message))
-                st.session_state.conversation_chain.retriever.event_list = []
-                st.session_state.conversation_chain.retriever.event_details = []
-            finally:
-                event_search_manager.reset()
-                return # IMPORTANT: Exit to display the event list and prevent falling through to the LLM.
-    else:
-        # If not an event query, ensure the event list in the retriever is empty
-        st.session_state.conversation_chain.retriever.event_list = []
-        st.session_state.conversation_chain.retriever.event_details = []
-
-    # 5. Check if the user is asking to add events to the calendar.
-    # This logic is designed to be robust and prevent the LLM from hallucinating
-    # confirmations by reliably intercepting calendar-related commands.
-    user_wants_to_add_events = False
-    if 'last_found_events' in st.session_state and st.session_state.last_found_events:
-        question_lower = question.lower().strip()
-        
-        # Define keywords that strongly indicate a command to add events.
-        action_keywords = ["add", "put", "schedule", "yes", "yep", "ok", "sure", "please"]
-        
-        # Define question words to avoid false positives on questions.
-        question_words = ["what", "which", "who", "when", "where", "how", "why", "is", "are", "can", "do", "will", "should"]
-
-        is_a_question = any(question_lower.startswith(q_word) for q_word in question_words)
-        has_action_keyword = any(a_word in question_lower for a_word in action_keywords)
-
-        # Trigger if the intent is clear and it's not a question.
-        if has_action_keyword and not is_a_question:
-            user_wants_to_add_events = True
+def main():
+    print("=== MANUAL EVENT CALENDAR OPERATION ===")
     
-    if user_wants_to_add_events:
-        # Prevent concurrent calendar operations
-        if st.session_state.get('calendar_operation_in_progress'):
-            st.warning("⏳ Calendar operation already in progress. Please wait...")
+    # Event data (passed from main app)
+    events_data = {json.dumps(events_data, indent=4)}
+    
+    # Quick access check
+    print("Checking calendar access...")
+    try:
+        has_access, status = check_google_calendar_access()
+        print(f"Access: {{has_access}} - {{status}}")
+    except Exception as e:
+        print(f"RESULT:ACCESS_CHECK_FAILED:{{str(e)}}")
+        return
+    
+    # If no access, try OAuth once
+    if not has_access:
+        print("No access, initiating OAuth...")
+        try:
+            success, message = initiate_oauth_flow()
+            print(f"OAuth result: {{success}} - {{message}}")
+            if not success:
+                print(f"RESULT:OAUTH_FAILED:{{message}}")
+                return
+        except Exception as e:
+            print(f"RESULT:OAUTH_ERROR:{{str(e)}}")
             return
         
-        st.session_state['calendar_operation_in_progress'] = True
+        # Check access again
+        try:
+            has_access, status = check_google_calendar_access()
+            print(f"Post-OAuth access: {{has_access}} - {{status}}")
+        except Exception as e:
+            print(f"RESULT:POST_OAUTH_CHECK_FAILED:{{str(e)}}")
+            return
+    
+    # If we still don't have access, fail
+    if not has_access:
+        print(f"RESULT:ACCESS_FAILED:{{status}}")
+        return
+    
+    # Add the event
+    event_data = events_data[0]
+    print(f"Adding manual event: {{event_data['summary']}}...")
+    try:
+        success, message = add_event_to_google_calendar(event_data)
+        print(f"Manual event result: {{success}} - {{message}}")
+        
+        if success:
+            print(f"RESULT:SUCCESS:{{message}}")
+        else:
+            print(f"RESULT:FAILED:{{message}}")
+    except Exception as e:
+        print(f"RESULT:CALENDAR_ERROR:{{str(e)}}")
+
+if __name__ == '__main__':
+    main()
+'''
+        
+        # Write the script to a temporary file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(script_content)
+            temp_script_path = f.name
         
         try:
-            with st.spinner("Adding event to your calendar..."):
-                # Get the events that were previously found
-                found_events_details = st.session_state.get('last_found_events_details', [])
-                found_events_summaries = st.session_state.get('last_found_events', [])
-                
-                if not found_events_details:
-                    response_message = "I don't have any events to add. Please search for events first."
-                    st.session_state.chat_history.append(AIMessage(content=response_message))
-                    return
-                
-                # Use the filter function to determine which events to add
-                events_to_add = filter_events_to_add(question, found_events_summaries, found_events_details)
-                
-                # Handle special QUESTION return value - pass to main LLM
-                if events_to_add == "QUESTION":
-                    # User asked a question about the events - let the main conversation chain handle it
-                    # Make sure the event context is available to the LLM
-                    st.session_state.conversation_chain.retriever.event_list = found_events_summaries
-                    st.session_state.conversation_chain.retriever.event_details = found_events_details
+            # Run the script in a subprocess
+            result = subprocess.run(
+                [sys.executable, temp_script_path], 
+                capture_output=True, 
+                text=True, 
+                timeout=60,
+                cwd=os.getcwd()
+            )
+            
+            # Parse the result from the script output
+            output_lines = result.stdout.strip().split('\n')
+            result_line = None
+            for line in output_lines:
+                if line.startswith('RESULT:'):
+                    result_line = line
+                    break
+            
+            if result_line:
+                parts = result_line.split(':', 2)
+                if len(parts) >= 3:
+                    result_type = parts[1]
+                    result_message = parts[2]
                     
-                    # Clear the calendar operation flag and let it fall through to the main LLM
-                    st.session_state.pop('calendar_operation_in_progress', None)
-                    # Don't return here - let it fall through to the LLM at the end
-                    user_wants_to_add_events = False  # Prevent calendar operation
-                    
-                elif events_to_add is None:
-                    # Ambiguous request - ask for clarification
-                    event_list_str = "\n".join([f"{i+1}. {summary}" for i, summary in enumerate(found_events_summaries)])
-                    response_message = f"I found these events:\n{event_list_str}\n\nCould you please specify which events you'd like me to add? You can say 'all', specific numbers like '1 and 3', or mention event names."
-                    st.session_state.chat_history.append(AIMessage(content=response_message))
-                    return
-                elif not events_to_add:
-                    # No events matched the selection criteria
-                    response_message = "I couldn't identify which specific events you want to add. Could you please be more specific? You can say 'all events', '1 and 3', or mention the event names."
-                    st.session_state.chat_history.append(AIMessage(content=response_message))
-                    return
+                    if result_type == 'SUCCESS':
+                        return f"✅ Successfully added '{calendar_event['summary']}' to your Google Calendar!"
+                    elif result_type == 'IMPORT_FAILED':
+                        return f"❌ Calendar setup issue: {result_message}. Please check your calendar integration."
+                    elif result_type in ['ACCESS_CHECK_FAILED', 'OAUTH_ERROR', 'POST_OAUTH_CHECK_FAILED', 'CALENDAR_ERROR']:
+                        return f"❌ Calendar error: {result_message}. Try the '🧪 Test Calendar Integration' button in the sidebar."
+                    else:
+                        return f"❌ Failed to add event: {result_message}"
+                else:
+                    return f"❌ Unexpected result format: {result_line}"
+            else:
+                if result.returncode == 0:
+                    return f"✅ Event '{calendar_event['summary']}' was added to your calendar!"
+                else:
+                    return f"❌ Calendar operation failed. Error: {result.stderr}"
+        
+        except subprocess.TimeoutExpired:
+            return "❌ Calendar operation timed out. Please try again."
+        except Exception as e:
+            return f"❌ Error running calendar operation: {str(e)}"
+        
+        finally:
+            # Clean up the temporary script
+            try:
+                os.unlink(temp_script_path)
+            except:
+                pass
                 
-                if events_to_add != "QUESTION":  # Only proceed with calendar operation if not a question
-                    # COMPLETELY ISOLATED APPROACH - Run calendar operation in subprocess
-                    # This avoids ALL Streamlit interference
-                    st.info(f"🚀 Running calendar operation in isolated mode... Adding {len(events_to_add)} event(s)")
-                    
-                    # Create a temporary script to run the calendar operation
-                    import tempfile
-                    import subprocess
-                    import sys
-                    import json
-                    
-                    # Prepare all events data for the subprocess
-                    events_data = []
-                    for event in events_to_add:
-                        # Parse the event date properly
-                        event_date_str = event.get('date', '')
-                        try:
-                            if event_date_str:
-                                date_parts = event_date_str.strip().split()
-                                if len(date_parts) >= 1:
-                                    date_part = date_parts[0]  # YYYY-MM-DD
-                                    time_part = date_parts[1] if len(date_parts) > 1 else "19:00"  # Default to 7 PM
-                                    
-                                    if time_part.upper().endswith(('AM', 'PM')):
-                                        # 12-hour format like "07:00 PM"
-                                        event_datetime = datetime.datetime.strptime(f"{date_part} {time_part}", "%Y-%m-%d %I:%M %p")
-                                    else:
-                                        # 24-hour format like "19:00"  
-                                        event_datetime = datetime.datetime.strptime(f"{date_part} {time_part}", "%Y-%m-%d %H:%M")
-                                else:
-                                    # Just date, default time
-                                    event_datetime = datetime.datetime.strptime(date_part, "%Y-%m-%d").replace(hour=19, minute=0)
-                            else:
-                                # No date info, default to tomorrow
-                                event_datetime = datetime.datetime.now() + datetime.timedelta(days=1)
-                                event_datetime = event_datetime.replace(hour=19, minute=0, second=0, microsecond=0)
-                        except (ValueError, IndexError):
-                            # Fallback to tomorrow if parsing fails
-                            event_datetime = datetime.datetime.now() + datetime.timedelta(days=1)
-                            event_datetime = event_datetime.replace(hour=19, minute=0, second=0, microsecond=0)
+    except Exception as e:
+        return f"❌ Error creating calendar event: {str(e)}"
+
+def add_events_to_calendar_subprocess(events_to_add):
+    """Add multiple events to calendar using subprocess approach."""
+    try:
+        # Prepare all events data for the subprocess
+        events_data = []
+        for event in events_to_add:
+            # Parse the event date properly
+            event_date_str = event.get('date', '')
+            try:
+                if event_date_str:
+                    date_parts = event_date_str.strip().split()
+                    if len(date_parts) >= 1:
+                        date_part = date_parts[0]  # YYYY-MM-DD
+                        time_part = date_parts[1] if len(date_parts) > 1 else "19:00"  # Default to 7 PM
                         
-                        # Create end time (2 hours later)
-                        end_datetime = event_datetime + datetime.timedelta(hours=2)
-                        
-                        # Create comprehensive event data
-                        event_data = {
-                            'summary': event.get('name', 'Event'),
-                            'location': event.get('venue', 'TBD'),
-                            'description': f"""Event Details:
+                        if time_part.upper().endswith(('AM', 'PM')):
+                            # 12-hour format like "07:00 PM"
+                            event_datetime = datetime.datetime.strptime(f"{date_part} {time_part}", "%Y-%m-%d %I:%M %p")
+                        else:
+                            # 24-hour format like "19:00"  
+                            event_datetime = datetime.datetime.strptime(f"{date_part} {time_part}", "%Y-%m-%d %H:%M")
+                    else:
+                        # Just date, default time
+                        event_datetime = datetime.datetime.strptime(date_part, "%Y-%m-%d").replace(hour=19, minute=0)
+                else:
+                    # No date info, default to tomorrow
+                    event_datetime = datetime.datetime.now() + datetime.timedelta(days=1)
+                    event_datetime = event_datetime.replace(hour=19, minute=0, second=0, microsecond=0)
+            except (ValueError, IndexError):
+                # Fallback to tomorrow if parsing fails
+                event_datetime = datetime.datetime.now() + datetime.timedelta(days=1)
+                event_datetime = event_datetime.replace(hour=19, minute=0, second=0, microsecond=0)
+            
+            # Create end time (2 hours later)
+            end_datetime = event_datetime + datetime.timedelta(hours=2)
+            
+            # Create comprehensive event data
+            event_data = {
+                'summary': event.get('name', 'Event'),
+                'location': event.get('venue', 'TBD'),
+                'description': f"""Event Details:
 • Event: {event.get('name', 'N/A')}
 • Artist/Performer: {event.get('artist', 'N/A')}
 • Venue: {event.get('venue', 'N/A')}
 • Description: {event.get('description', 'No additional information provided.')}
 
 Added via Hawaii Business Assistant""",
-                            'start': {
-                                'dateTime': event_datetime.isoformat(),
-                                'timeZone': 'Pacific/Honolulu',
-                            },
-                            'end': {
-                                'dateTime': end_datetime.isoformat(),
-                                'timeZone': 'Pacific/Honolulu',
-                            },
-                        }
-                        events_data.append(event_data)
-                    
-                    # Create the temporary script content for multiple events
-                    script_content = f'''
+                'start': {
+                    'dateTime': event_datetime.isoformat(),
+                    'timeZone': 'Pacific/Honolulu',
+                },
+                'end': {
+                    'dateTime': end_datetime.isoformat(),
+                    'timeZone': 'Pacific/Honolulu',
+                },
+            }
+            events_data.append(event_data)
+        
+        # Create the temporary script content for multiple events
+        import tempfile
+        import subprocess
+        import sys
+        import json
+        
+        script_content = f'''
 import sys
 import os
 import datetime
@@ -885,106 +1302,198 @@ def main():
 if __name__ == '__main__':
     main()
 '''
-                    
-                    # Write the script to a temporary file
-                    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-                        f.write(script_content)
-                        temp_script_path = f.name
-                    
-                    try:
-                        # Run the script in a subprocess with a reasonable timeout
-                        result = subprocess.run(
-                            [sys.executable, temp_script_path], 
-                            capture_output=True, 
-                            text=True, 
-                            timeout=60,  # 60 second timeout
-                            cwd=os.getcwd()
-                        )
-                        
-                        print(f"Subprocess return code: {result.returncode}")
-                        print(f"STDOUT: {result.stdout}")
-                        print(f"STDERR: {result.stderr}")
-                        
-                        # Parse the result from the script output
-                        output_lines = result.stdout.strip().split('\n')
-                        result_line = None
-                        for line in output_lines:
-                            if line.startswith('RESULT:'):
-                                result_line = line
-                                break
-                        
-                        if result_line:
-                            parts = result_line.split(':', 2)
-                            if len(parts) >= 3:
-                                result_type = parts[1]
-                                result_message = parts[2]
-                                
-                                if result_type == 'SUCCESS':
-                                    if len(events_to_add) == 1:
-                                        response_message = f"✅ Successfully added '{events_to_add[0].get('name', 'the event')}' to your Google Calendar! {result_message}"
-                                    else:
-                                        response_message = f"✅ {result_message}"
-                                elif result_type == 'PARTIAL':
-                                    response_message = f"⚠️ {result_message}"
-                                elif result_type == 'OAUTH_FAILED':
-                                    response_message = f"❌ Could not connect to Google Calendar: {result_message}. Please try the manual test button in the sidebar first."
-                                elif result_type == 'ACCESS_FAILED':
-                                    response_message = f"❌ Could not establish calendar connection: {result_message}. Please use the '🧪 Test Calendar Integration' button in the sidebar first."
-                                else:
-                                    response_message = f"❌ Failed to add event(s): {result_message}"
-                            else:
-                                response_message = f"❌ Unexpected result format: {result_line}"
-                        else:
-                            if result.returncode == 0:
-                                if len(events_to_add) == 1:
-                                    response_message = f"✅ Calendar operation completed, but couldn't parse result. Check your Google Calendar for '{events_to_add[0].get('name', 'the event')}'."
-                                else:
-                                    response_message = f"✅ Calendar operation completed, but couldn't parse result. Check your Google Calendar for the {len(events_to_add)} event(s) you requested."
-                            else:
-                                response_message = f"❌ Calendar operation failed with return code {result.returncode}. Error: {result.stderr}"
-                    
-                    except subprocess.TimeoutExpired:
-                        response_message = "❌ Calendar operation timed out after 60 seconds. Please try again or use the manual test button."
-                    except Exception as e:
-                        response_message = f"❌ Error running calendar operation: {str(e)}"
-                    
-                    finally:
-                        # Clean up the temporary script
-                        try:
-                            os.unlink(temp_script_path)
-                        except:
-                            pass
-                        
-                        # Clear events from session since we've processed the request
-                        st.session_state.pop('last_found_events', None)
-                        st.session_state.pop('last_found_events_details', None)
         
-        except Exception as e:
-            # Handle any errors in the calendar operation
-            response_message = f"❌ Error during calendar operation: {str(e)}"
-            st.session_state.chat_history.append(AIMessage(content=response_message))
-            return
+        # Write the script to a temporary file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(script_content)
+            temp_script_path = f.name
+        
+        try:
+            # Run the script in a subprocess with a reasonable timeout
+            result = subprocess.run(
+                [sys.executable, temp_script_path], 
+                capture_output=True, 
+                text=True, 
+                timeout=60,  # 60 second timeout
+                cwd=os.getcwd()
+            )
             
-        finally:
-            # Always clear the operation flag
-            st.session_state.pop('calendar_operation_in_progress', None)
+            # Parse the result from the script output
+            output_lines = result.stdout.strip().split('\n')
+            result_line = None
+            for line in output_lines:
+                if line.startswith('RESULT:'):
+                    result_line = line
+                    break
+            
+            if result_line:
+                parts = result_line.split(':', 2)
+                if len(parts) >= 3:
+                    result_type = parts[1]
+                    result_message = parts[2]
+                    
+                    if result_type == 'SUCCESS':
+                        if len(events_to_add) == 1:
+                            return f"✅ Successfully added '{events_to_add[0].get('name', 'the event')}' to your Google Calendar! {result_message}"
+                        else:
+                            return f"✅ {result_message}"
+                    elif result_type == 'PARTIAL':
+                        return f"⚠️ {result_message}"
+                    elif result_type == 'OAUTH_FAILED':
+                        return f"❌ Could not connect to Google Calendar: {result_message}. Please try the manual test button in the sidebar first."
+                    elif result_type == 'ACCESS_FAILED':
+                        return f"❌ Could not establish calendar connection: {result_message}. Please use the '🧪 Test Calendar Integration' button in the sidebar first."
+                    else:
+                        return f"❌ Failed to add event(s): {result_message}"
+                else:
+                    return f"❌ Unexpected result format: {result_line}"
+            else:
+                if result.returncode == 0:
+                    if len(events_to_add) == 1:
+                        return f"✅ Calendar operation completed, but couldn't parse result. Check your Google Calendar for '{events_to_add[0].get('name', 'the event')}'."
+                    else:
+                        return f"✅ Calendar operation completed, but couldn't parse result. Check your Google Calendar for the {len(events_to_add)} event(s) you requested."
+                else:
+                    return f"❌ Calendar operation failed with return code {result.returncode}. Error: {result.stderr}"
         
-        if user_wants_to_add_events:  # Only add response if we actually processed calendar events
-            st.session_state.chat_history.append(AIMessage(content=response_message))
-            return # IMPORTANT: Exit to prevent this from going to the LLM.
+        except subprocess.TimeoutExpired:
+            return "❌ Calendar operation timed out after 60 seconds. Please try again or use the manual test button."
+        except Exception as e:
+            return f"❌ Error running calendar operation: {str(e)}"
+        
+        finally:
+            # Clean up the temporary script
+            try:
+                os.unlink(temp_script_path)
+            except:
+                pass
+                
+    except Exception as e:
+        return f"❌ Error preparing calendar events: {str(e)}"
 
-    # --- Core Conversation Logic ---
-    # Sync the conversation chain's memory with the current session chat history.
-    # This is crucial to prevent the chain from working with stale data, especially
-    # after multi-turn interactions like the event search flow.
-    st.session_state.conversation_chain.memory.chat_memory.messages = st.session_state.chat_history.copy()
+# Add to the top of the file (after imports)
+EVENT_SEARCH_STEPS = [
+    'awaiting_greeting',
+    'awaiting_location',
+    'awaiting_event_type',
+    'ready_to_search'
+]
 
-    # Get the final response from the conversation chain
-    response = st.session_state.conversation_chain({'question': question})
+def handle_user_input(question):
+    # 1. Initialize conversation chain if it doesn't exist
+    if "conversation_chain" not in st.session_state or st.session_state.conversation_chain is None:
+        initialize_conversation()
     
-    # Append the assistant's response to the chat history.
-    # We explicitly manage the history in st.session_state, so we only need the answer here.
-    st.session_state.chat_history.append(AIMessage(content=response['answer']))
+    # 2. Add user's message to chat history
+    st.session_state.chat_history.append(HumanMessage(content=question))
+
+    # --- New: Step-by-step event search flow ---
+    if 'event_search_step' not in st.session_state:
+        st.session_state.event_search_step = EVENT_SEARCH_STEPS[0]
+        st.session_state.event_search_context = {}
+    
+    # Check if user is changing time frame during the conversation
+    time_frame_change = _detect_time_frame_change(question)
+    if time_frame_change and st.session_state.event_search_step != 'awaiting_greeting':
+        # Update time frame and continue with current step
+        st.session_state.event_search_context['time_frame'] = time_frame_change
+        st.session_state.chat_history.append(AIMessage(content=f"Got it! I'll search for events {time_frame_change}. Now, which island or city would you like to search for events in?"))
+        st.session_state.event_search_step = 'awaiting_location'
+        return
+    
+    # Step 1: Greet and explain default time period
+    if st.session_state.event_search_step == 'awaiting_greeting':
+        st.session_state.event_search_step = 'awaiting_location'
+        st.session_state.event_search_context['time_frame'] = 'for the next month'
+        st.session_state.chat_history.append(AIMessage(content="Aloha! I'll search for events happening in Hawaii for the next month by default. If you'd like to search for a different time period, just let me know!"))
+        st.session_state.chat_history.append(AIMessage(content="Which island or city would you like to search for events in?"))
+        return
+    
+    # Step 2: Ask for island/city
+    if st.session_state.event_search_step == 'awaiting_location':
+        # Check if user is actually providing a location or changing time frame
+        if _detect_time_frame_change(question):
+            time_frame = _detect_time_frame_change(question)
+            st.session_state.event_search_context['time_frame'] = time_frame
+            st.session_state.chat_history.append(AIMessage(content=f"Got it! I'll search for events {time_frame}. Which island or city would you like to search for events in?"))
+            return
+        else:
+            st.session_state.event_search_context['location'] = question.strip()
+            st.session_state.event_search_step = 'awaiting_event_type'
+            st.session_state.chat_history.append(AIMessage(content="Are you interested in a specific type of event (like music, food, business, etc.), or would you like to see all events? You can say 'all events' to see everything."))
+            return
+    
+    # Step 3: Ask for event type or all events
+    if st.session_state.event_search_step == 'awaiting_event_type':
+        # Check if user is changing time frame instead of providing event type
+        if _detect_time_frame_change(question):
+            time_frame = _detect_time_frame_change(question)
+            st.session_state.event_search_context['time_frame'] = time_frame
+            st.session_state.chat_history.append(AIMessage(content=f"Got it! I'll search for events {time_frame}. Are you interested in a specific type of event (like music, food, business, etc.), or would you like to see all events? You can say 'all events' to see everything."))
+            return
+        else:
+            event_type = question.strip().lower()
+            st.session_state.event_search_context['event_type'] = event_type
+            st.session_state.event_search_step = 'ready_to_search'
+    
+    # Step 4: Perform the search
+    if st.session_state.event_search_step == 'ready_to_search':
+        location = st.session_state.event_search_context.get('location', '')
+        event_type = st.session_state.event_search_context.get('event_type', '')
+        time_frame = st.session_state.event_search_context.get('time_frame', 'for the next month')
+        is_island = location.lower() in ISLAND_CITY_MAP
+        # If user said 'all events', search with no topic filter
+        query = '' if event_type in ['all', 'all events', 'everything', 'any'] else event_type
+        summaries, details = unified_event_search(query, location, is_island)
+        st.session_state.last_found_events = summaries
+        st.session_state.last_found_events_details = details
+        response_parts = []
+        if summaries:
+            response_parts.append(f"Aloha! Here are the upcoming events in {location.title()} {time_frame}:")
+            for i, summary in enumerate(summaries):
+                response_parts.append(f"{i+1}. {summary}")
+            response_parts.append("\nWould you like me to add any of these to your calendar?")
+        else:
+            response_parts.append(f"I couldn't find any events in {location.title()} {time_frame}. Would you like to try a different location or see uncertain events?")
+        st.session_state.chat_history.append(AIMessage(content="\n".join(response_parts)))
+        # Reset the step for next search
+        st.session_state.event_search_step = EVENT_SEARCH_STEPS[0]
+        st.session_state.event_search_context = {}
+        return
+
+    # --- Existing logic for manual event creation, calendar add, etc. follows here ---
+    # ... (rest of handle_user_input unchanged) ...
+
+def _detect_time_frame_change(question: str) -> str or None:
+    """Detect if the user is requesting a time frame change."""
+    question_lower = question.lower()
+    
+    # Common time frame patterns
+    time_patterns = {
+        r'(\d+)\s*month': lambda m: f"for the next {m.group(1)} month{'s' if int(m.group(1)) > 1 else ''}",
+        r'(\d+)\s*week': lambda m: f"for the next {m.group(1)} week{'s' if int(m.group(1)) > 1 else ''}",
+        r'(\d+)\s*day': lambda m: f"for the next {m.group(1)} day{'s' if int(m.group(1)) > 1 else ''}",
+        r'next\s*(\d+)\s*month': lambda m: f"for the next {m.group(1)} month{'s' if int(m.group(1)) > 1 else ''}",
+        r'next\s*(\d+)\s*week': lambda m: f"for the next {m.group(1)} week{'s' if int(m.group(1)) > 1 else ''}",
+        r'next\s*(\d+)\s*day': lambda m: f"for the next {m.group(1)} day{'s' if int(m.group(1)) > 1 else ''}",
+        r'this\s*month': "for this month",
+        r'this\s*week': "for this week",
+        r'next\s*month': "for the next month",
+        r'next\s*week': "for the next week",
+        r'this\s*year': "for this year",
+        r'next\s*year': "for next year"
+    }
+    
+    import re
+    for pattern, replacement in time_patterns.items():
+        match = re.search(pattern, question_lower)
+        if match:
+            if callable(replacement):
+                return replacement(match)
+            else:
+                return replacement
+    
+    return None
 
 def initialize_conversation():
     """Initialize the conversation chain and store it in session state."""
@@ -1060,7 +1569,7 @@ def main():
         st.session_state.show_connect_button = False
     
     if not st.session_state.initial_greeting_shown:
-        initial_message = "Aloha! I'm here to help you with your Hawaii-based business questions. How are you doing today? I'd love to assist you with any information you need about your business in Hawaii.\n\nI can also help you find events happening in Hawaii. Just ask me about events and I'll do my best to find something for you!"
+        initial_message = "Aloha! I'm here to help you with your Hawaii-based business questions. How are you doing today? I'd love to assist you with any information you need about your business in Hawaii.\n\nI can also help you with events in two ways:\n1. **Find events**: Ask me to find events happening in Hawaii and I'll search for you\n2. **Create events**: Ask me to create or schedule an event and I'll help you add it to your calendar with all the details\n\nJust let me know what you need!"
         
         # Add the initial greeting to chat history as a bot message
         st.session_state.chat_history.append(AIMessage(content=initial_message))

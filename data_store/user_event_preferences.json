@@ -1,0 +1,28 @@
+{
+  "interested_events": [
+    {
+      "event": {
+        "name": "Jazz at Blue Note",
+        "event_type": "Music",
+        "categories": [
+          "music",
+          "jazz"
+        ]
+      },
+      "action": "viewed",
+      "timestamp": "2025-07-16T22:24:23.721530"
+    },
+    {
+      "event": {
+        "name": "Hawaii Business Connect Networking",
+        "event_type": "Business",
+        "categories": [
+          "business",
+          "networking"
+        ]
+      },
+      "action": "added_to_calendar",
+      "timestamp": "2025-07-18T22:24:23.721559"
+    }
+  ]
+}
