@@ -1,6 +1,5 @@
 # Environment variables
 .env
-.env.example
 
 # Google OAuth credentials (generated from environment variables)
 credentials.json

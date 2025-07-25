@@ -7,45 +7,23 @@ A powerful chatbot application that integrates with Google Calendar for enhanced
 - **Google Calendar Integration**: View, create, and manage calendar events
 - **Advanced Chat Interface**: Interactive chat with AI assistance
 - **Secure OAuth Authentication**: Secure Google Calendar access
-- **Modern UI**: Clean and responsive interface built with Streamlit
-- **Cloud Ready**: Optimized for deployment on Streamlit Cloud
+
 
 ## Prerequisites
 
 - Python 3.8 or higher (Python 3.13 supported with limitations)
 - Google Cloud Platform account
 - OpenAI API key
+- Ticketmaster Developer account (for event search)
 
 ## Quick Start
 
-### 🚀 Deploy to Streamlit Cloud (Recommended)
-
-The easiest way to get started is to deploy directly to Streamlit Cloud:
-
-1. **Fork this repository** to your GitHub account
-2. **Go to [share.streamlit.io](https://share.streamlit.io)**
-3. **Connect your GitHub account**
-4. **Deploy the app** by selecting this repository
-5. **Configure secrets** (see deployment guide below)
-
-📖 **Detailed deployment guide**: [STREAMLIT_CLOUD_DEPLOYMENT.md](STREAMLIT_CLOUD_DEPLOYMENT.md)
-
-### 🖥️ Local Installation
-
-#### Standard Installation (Python 3.8-3.12)
-
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd Chat-Gidens
-   ```
-
-2. **Install dependencies**
+1. **Install dependencies**
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Set up environment variables**
+2. **Set up environment variables**
    ```bash
    cp .env.example .env
    ```
@@ -58,30 +36,9 @@ The easiest way to get started is to deploy directly to Streamlit Cloud:
 
 If you're using Python 3.13, some packages may not have pre-built wheels. Use the Python 3.13 specific requirements:
 
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd Chat-Gidens
-   ```
-
-2. **Install system dependencies** (if needed)
-   ```bash
-   # On Linux (Ubuntu/Debian)
-   sudo apt-get update && sudo apt-get install -y build-essential python3-dev pkg-config cmake
-   
-   # Or run the automated script
-   ./install_system_deps.sh
-   ```
-
-3. **Install Python 3.13 compatible dependencies**
+ **Install Python 3.13 compatible dependencies**
    ```bash
    pip install -r requirements-python313.txt
-   ```
-
-4. **Set up environment variables**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your credentials
    ```
 
 ## Google OAuth Setup
@@ -120,6 +77,20 @@ GOOGLE_AUTH_PROVIDER_X509_CERT_URL="https://www.googleapis.com/oauth2/v1/certs"
 GOOGLE_CLIENT_SECRET="your_client_secret_here"
 ```
 
+## Ticketmaster API Setup
+
+This app integrates with the Ticketmaster Discovery API to allow users to search for live events and activities. To enable this feature:
+
+1. Go to [Ticketmaster Developer Portal](https://developer.ticketmaster.com/)
+2. Sign up for a free account and create an application
+3. Copy your API key
+4. Add the following to your `.env` file:
+   ```env
+   TICKETMASTER_API_KEY="your_ticketmaster_api_key_here"
+   ```
+
+The app will use this key to fetch event data from Ticketmaster. If the key is missing or invalid, event search features will not work.
+
 ## Usage
 
 1. **Start the application**
@@ -129,26 +100,13 @@ GOOGLE_CLIENT_SECRET="your_client_secret_here"
 
 2. **Access the application**
    - **Local**: Open your browser and go to `http://localhost:8501`
-   - **Cloud**: Your app will be available at your Streamlit Cloud URL
 
-3. **Google Calendar Integration**
-   - Click "Connect Google Calendar" to authenticate
-   - View your upcoming events
-   - Create new calendar events
-   - Manage your schedule directly from the chat interface
-
-4. **Chat with AI Assistant**
+3. **Chat with AI Assistant**
    - Type your questions in the chat interface
-   - The AI will help you with calendar management and event planning
-   - Ask questions about your schedule or request help creating events
+   - The AI will help you with calendar management, event planning, and searching for live events via Ticketmaster
+   - Ask questions about your schedule, request help creating events, or search for local activities
 
 ## Troubleshooting
-
-### Streamlit Cloud Issues
-- **App not deploying**: Check `requirements.txt` for compatibility
-- **OAuth not working**: Verify redirect URIs include your cloud URL
-- **Secrets not loading**: Ensure secrets are configured in Streamlit Cloud dashboard
-- **Memory errors**: Optimize for cloud resource limits
 
 ### Python 3.13 Issues
 - **Package compatibility**: Some advanced features may not be available
