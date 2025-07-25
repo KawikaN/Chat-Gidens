@@ -1,7 +1,7 @@
 from typing import List, Dict, Optional, Tuple
 import streamlit as st
 from langchain.chat_models import ChatOpenAI
-from enhanced_events import EnhancedEventManager, enhanced_search_events, format_events_for_chat, unified_event_search, ISLAND_CITY_MAP
+from enhanced_events import EnhancedEventManager, enhanced_search_events, format_events_for_chat, unified_event_search, ISLAND_CITY_MAP, get_island_city_list_str
 import json
 
 
@@ -91,7 +91,7 @@ Response:"""
         
         formatted_events = []
         formatted_events.append("**Events I'm uncertain about:**")
-        formatted_events.append("*(These events had unclear descriptions or titles)*\n")
+        formatted_events.append("*(These events had unclear descriptions or titles, or I couldn't confidently match their location)*\n")
         
         for i, uncertain_entry in enumerate(uncertain_events):
             event = uncertain_entry['event']
@@ -99,17 +99,12 @@ Response:"""
             
             name = event.get('name', 'Unknown Event')
             date = event.get('date', 'TBD')
-            venue = event.get('venue', 'TBD')
-            description = event.get('description', 'No description available')
+            location = event.get('location', 'TBD')
+            description = event.get('description', 'No description available.')
             
-            formatted_events.append(f"{i+1}. **{name}**")
-            formatted_events.append(f"   📅 Date: {date}")
-            formatted_events.append(f"   📍 Venue: {venue}")
-            formatted_events.append(f"   📝 Description: {description}")
-            formatted_events.append(f"   ❓ Reason for uncertainty: {reason}")
-            formatted_events.append("")
+            formatted_events.append(f"{i+1}. {name} - {date} at {location}\nReason: {reason}\nDescription: {description}\n")
         
-        formatted_events.append("Let me know if any of these interest you!")
+        formatted_events.append("\nYou can ask me questions about any of these events, and I'll answer using the details above.")
         
         return "\n".join(formatted_events)
     
@@ -176,12 +171,22 @@ class EnhancedEventConversationFlow:
             st.session_state.last_found_events_details = details
             response_parts = []
             if summaries:
-                response_parts.append(f"Aloha! Here are the upcoming events in {city.title()}:")
+                response_parts.append(f"Aloha! Here are the upcoming events in {city.title()}:" )
                 for i, summary in enumerate(summaries):
                     response_parts.append(f"{i+1}. {summary}")
                 response_parts.append("\nWould you like me to add any of these to your calendar?")
+                # Add city/island list info
+                response_parts.append("\n" + get_island_city_list_str())
+                # Offer uncertain events if any
+                manager = EnhancedEventManager()
+                uncertain_events = manager.get_uncertain_events()
+                if uncertain_events:
+                    response_parts.append(f"\nI also found {len(uncertain_events)} event(s) where I wasn't sure if they fit your location. Would you like to see these 'uncertain' events?")
+                # Let user know about Q&A
+                response_parts.append("\nYou can also ask me questions about any of these events, and I'll answer using the list above without needing to search again.")
             else:
                 response_parts.append(f"I couldn't find any events in {city.title()} for the next month. Would you like to try a different location or see uncertain events?")
+                response_parts.append("\n" + get_island_city_list_str())
             return "\n".join(response_parts)
         
         # If multiple topics detected, ask user to narrow down or see all events
@@ -311,6 +316,29 @@ class EnhancedEventConversationFlow:
     def is_topic_selection_pending(self) -> bool:
         """Check if we're waiting for topic selection."""
         return st.session_state.enhanced_event_state.get('awaiting_topic_selection', False)
+
+    def answer_event_question(self, user_question: str) -> str:
+        """Answer a user's question about the last returned events using the stored event details."""
+        summaries = st.session_state.get('last_found_events', [])
+        details = st.session_state.get('last_found_events_details', [])
+        if not summaries or not details:
+            return "I don't have any recent events to answer questions about. Please search for events first."
+        # Prepare context for LLM
+        event_context = "\n".join([
+            f"{i+1}. {d.get('name', 'Unknown Event')} - {d.get('date', 'TBD')} at {d.get('location', 'TBD')}. Description: {d.get('description', 'No description available.')}"
+            for i, d in enumerate(details)
+        ])
+        prompt = f"""You are an event assistant. The user has just been shown this list of events:\n\n{event_context}\n\nThe user asked: '{user_question}'\n\nAnswer the user's question using only the information above. If you don't know the answer, say you don't know based on the provided event details."""
+        llm = ChatOpenAI(temperature=0)
+        return llm.predict(prompt).strip()
+
+    def get_last_event_list(self) -> str:
+        """Return the most recent event list in a user-friendly format, or a helpful message if none are available."""
+        summaries = st.session_state.get('last_found_events', [])
+        details = st.session_state.get('last_found_events_details', [])
+        if not summaries or not details:
+            return "I don't have any recent events to show. Please search for events first."
+        return format_events_for_chat(summaries, details)
 
 
 def integrate_enhanced_events_with_existing_flow():

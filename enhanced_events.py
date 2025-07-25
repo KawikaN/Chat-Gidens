@@ -756,22 +756,33 @@ def parse_evt_txt(file_path: str = "evt.txt") -> list:
     return filtered_events
 
 ISLAND_CITY_MAP = {
-    "oahu": ["Honolulu", "Kailua", "Pearl City", "Waipahu", "Kaneohe", "Mililani"],
-    "maui": ["Kahului", "Lahaina", "Kihei", "Wailuku", "Pukalani"],
-    "big island": ["Hilo", "Kailua-Kona", "Waimea", "Kealakekua"],
-    "kauai": ["Lihue", "Kapaa", "Hanalei", "Koloa"],
+    "oahu": [
+        "Honolulu", "Kailua", "Pearl City", "Waipahu", "Kaneohe", "Mililani", "Ewa Beach", "Aiea", "Kapolei", "Wahiawa", "Haleiwa", "Laie", "Hauula", "Waimanalo", "Makaha", "Waialua", "Waianae", "Schofield Barracks"
+    ],
+    "maui": [
+        "Kahului", "Lahaina", "Kihei", "Wailuku", "Pukalani", "Makawao", "Paia", "Hana", "Kula", "Napili-Honokowai", "Maalaea"
+    ],
+    "big island": [
+        "Hilo", "Kailua-Kona", "Waimea", "Kealakekua", "Pahoa", "Volcano", "Hawi", "Honokaa", "Keaau", "Kamuela", "Ocean View", "Mountain View", "Papaikou", "Pepeekeo"
+    ],
+    "kauai": [
+        "Lihue", "Kapaa", "Hanalei", "Koloa", "Princeville", "Waimea", "Kalaheo", "Hanapepe", "Kekaha", "Wailua"
+    ],
 }
 
+def get_island_city_list_str():
+    """Return a user-friendly string listing all major cities/towns for each island."""
+    lines = ["Here's how I match events to islands and cities:"]
+    for island, cities in ISLAND_CITY_MAP.items():
+        lines.append(f"- {island.title()}: {', '.join(cities)}")
+    return '\n'.join(lines)
+
 def get_evt_txt_events(location: str, is_island: bool = False) -> list:
-    """Return events from evt.txt for a given city or island."""
     print(f"[DEBUG] get_evt_txt_events called with location='{location}', is_island={is_island}")
-    
     events = parse_evt_txt()
     print(f"[DEBUG] parse_evt_txt returned {len(events)} total events")
-    
     location = location.lower()
     print(f"[DEBUG] Looking for events matching location: '{location}'")
-    
     if is_island and location in ISLAND_CITY_MAP:
         cities = ISLAND_CITY_MAP[location]
         print(f"[DEBUG] Island search - checking cities: {cities}")
@@ -780,10 +791,9 @@ def get_evt_txt_events(location: str, is_island: bool = False) -> list:
             if e.get("location"):
                 event_location = e["location"].lower()
                 event_name = e.get("name", "").lower()
-                print(f"[DEBUG] Checking event '{e.get('name')}' with location '{e.get('location')}'")
                 for city in cities:
-                    if city.lower() in event_location or city.lower() in event_name:
-                        print(f"[DEBUG] MATCH: '{e.get('name')}' matches city '{city}'")
+                    city_l = city.lower()
+                    if city_l in event_location or city_l in event_name:
                         matching_events.append(e)
                         break
         print(f"[DEBUG] Island search found {len(matching_events)} matching events")
@@ -795,20 +805,8 @@ def get_evt_txt_events(location: str, is_island: bool = False) -> list:
             if e.get("location"):
                 event_location = e["location"].lower()
                 event_name = e.get("name", "").lower()
-                print(f"[DEBUG] Checking event '{e.get('name')}' with location '{e.get('location')}'")
-                
-                # Check if location contains the city name
-                location_matches = location in event_location
-                
-                # Check if event name contains the city name (for events like "Honolulu Farmers Market")
-                name_matches = location in event_name
-                
-                if location_matches or name_matches:
-                    print(f"[DEBUG] MATCH: '{e.get('name')}' matches location '{location}' (location_match={location_matches}, name_match={name_matches})")
+                if location in event_location or location in event_name:
                     matching_events.append(e)
-                else:
-                    print(f"[DEBUG] NO MATCH: '{e.get('name')}' doesn't match '{location}'")
-        
         print(f"[DEBUG] City search found {len(matching_events)} matching events")
         return matching_events
 
@@ -853,11 +851,59 @@ If none match, return []."""
 
 def unified_event_search(query: str, location: str, is_island: bool = False, start_date: str = None, end_date: str = None) -> Tuple[List[str], List[Dict]]:
     """Combine evt.txt and Ticketmaster events for a city or island, return unified formatted results. Includes debug logging."""
+    from datetime import datetime
+    import re
     # 1. Get evt.txt events
     evt_events = get_evt_txt_events(location, is_island)
     # Filter by topic/type if needed
     filtered_evt_events = filter_evt_txt_events_by_topic(evt_events, query)
-    print(f"[DEBUG] evt.txt events for location '{location}' (is_island={is_island}): {len(filtered_evt_events)} after topic filter '{query}'")
+    # --- DATE FILTERING FOR EVT.TXT EVENTS ---
+    def parse_event_date(date_str):
+        # Try to parse common date formats, fallback to None
+        if not date_str:
+            return None
+        try:
+            # Try 'Month Day, Year' (e.g., 'August 3, 2025')
+            return datetime.strptime(date_str, '%B %d, %Y')
+        except Exception:
+            pass
+        try:
+            # Try 'Month Day Year' (e.g., 'August 3 2025')
+            return datetime.strptime(date_str, '%B %d %Y')
+        except Exception:
+            pass
+        try:
+            # Try 'YYYY-MM-DD'
+            return datetime.strptime(date_str, '%Y-%m-%d')
+        except Exception:
+            pass
+        # Try to extract date from string using regex
+        match = re.search(r'([A-Za-z]+) (\d{1,2}), (\d{4})', date_str)
+        if match:
+            try:
+                return datetime.strptime(match.group(0), '%B %d, %Y')
+            except Exception:
+                pass
+        return None
+    # Default date range: next 30 days
+    now = datetime.now()
+    if not start_date:
+        start_date_dt = now
+    else:
+        try:
+            start_date_dt = datetime.strptime(start_date[:10], '%Y-%m-%d')
+        except Exception:
+            start_date_dt = now
+    if not end_date:
+        end_date_dt = now.replace(hour=23, minute=59, second=59) + timedelta(days=30)
+    else:
+        try:
+            end_date_dt = datetime.strptime(end_date[:10], '%Y-%m-%d')
+        except Exception:
+            end_date_dt = now.replace(hour=23, minute=59, second=59) + timedelta(days=30)
+    # Filter events by date
+    filtered_evt_events = [e for e in filtered_evt_events if parse_event_date(e.get('date')) and start_date_dt <= parse_event_date(e.get('date')) <= end_date_dt]
+    print(f"[DEBUG] evt.txt events for location '{location}' (is_island={is_island}): {len(filtered_evt_events)} after topic/date filter '{query}'")
     for e in filtered_evt_events:
         print(f"[DEBUG] evt.txt event: {e}")
     evt_summaries = [format_unified_event(e) for e in filtered_evt_events]

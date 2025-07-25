@@ -1387,7 +1387,118 @@ def handle_user_input(question):
     # 2. Add user's message to chat history
     st.session_state.chat_history.append(HumanMessage(content=question))
 
-    # --- New: Step-by-step event search flow ---
+    # --- IMPROVED: Distinguish between add-to-calendar and Q&A requests, and track last referenced event ---
+    if st.session_state.get('last_found_events') and st.session_state.get('last_found_events_details'):
+        add_intent_words = [
+            'add', 'put', 'schedule', 'calendar', 'create', 'book', 'plan', 'insert', 'save', 'set', 'place', 'include'
+        ]
+        lower_q = question.lower().strip()
+        from enhanced_topic_search import EnhancedEventConversationFlow
+        all_event_summaries = st.session_state['last_found_events']
+        all_event_details = st.session_state['last_found_events_details']
+        import re
+        event_number_match = re.search(r'(?:event\s*#?|#)(\d+)', lower_q)
+        event_index = None
+        if event_number_match:
+            event_index = int(event_number_match.group(1)) - 1
+            if 0 <= event_index < len(all_event_details):
+                st.session_state['last_referenced_event_index'] = event_index
+        elif 'this event' in lower_q or 'that event' in lower_q:
+            event_index = st.session_state.get('last_referenced_event_index')
+        elif re.fullmatch(r'\d+', lower_q):
+            event_index = int(lower_q) - 1
+            if 0 <= event_index < len(all_event_details):
+                st.session_state['last_referenced_event_index'] = event_index
+
+        if any(word in lower_q for word in add_intent_words):
+            # If user refers to 'this event', 'that event', or just a number, use last referenced event
+            if (('this event' in lower_q or 'that event' in lower_q or re.fullmatch(r'\d+', lower_q))
+                and st.session_state.get('last_referenced_event_index') is not None):
+                idx = st.session_state['last_referenced_event_index']
+                add_result = [all_event_details[idx]]
+            else:
+                add_result = filter_events_to_add(question, all_event_summaries, all_event_details)
+            if isinstance(add_result, list):
+                if not add_result:
+                    st.session_state.chat_history.append(AIMessage(content="I couldn't find any events matching your request to add. Please specify which event(s) you'd like to add to your calendar."))
+                    return
+                # --- Deduplicate events by name, date, and location ---
+                seen = set()
+                unique_events = []
+                for event in add_result:
+                    key = (event.get('name', '').strip().lower(), event.get('date', '').strip(), event.get('location', '').strip().lower())
+                    if key not in seen:
+                        seen.add(key)
+                        unique_events.append(event)
+                from app import add_events_to_calendar_subprocess
+                result_msg = add_events_to_calendar_subprocess(unique_events)
+                # --- Post-process result message for accurate count ---
+                import re
+                link_matches = re.findall(r'https://www\.google\.com/calendar/event\?eid=[^\s|]+', result_msg)
+                n_links = len(link_matches)
+                n_events = len(unique_events)
+                # If only one event, show single message
+                if n_events == 1:
+                    msg = f"✅ Successfully added '{unique_events[0].get('name', 'the event')}' to your Google Calendar!"
+                    if n_links:
+                        msg += f" Link: {link_matches[0]}"
+                else:
+                    msg = f"✅ Successfully added {n_events} unique event(s) to your calendar!"
+                    if n_links:
+                        msg += " Links: " + " | ".join(link_matches[:3])
+                st.session_state.chat_history.append(AIMessage(content=msg))
+                return
+            elif add_result is None:
+                st.session_state.chat_history.append(AIMessage(content="Could you clarify which event(s) you'd like to add to your calendar? You can specify by number, name, or say 'all events'."))
+                return
+            elif add_result == "QUESTION":
+                flow = EnhancedEventConversationFlow()
+                answer = flow.answer_event_question(question)
+                st.session_state.chat_history.append(AIMessage(content=answer))
+                return
+        else:
+            if event_index is not None and 0 <= event_index < len(all_event_details):
+                st.session_state['last_referenced_event_index'] = event_index
+            flow = EnhancedEventConversationFlow()
+            answer = flow.answer_event_question(question)
+            st.session_state.chat_history.append(AIMessage(content=answer))
+            return
+
+    # --- If the user asks to see the event list again, print it from session ---
+    lower_q = question.lower().strip()
+    show_list_phrases = [
+        'show the list again', 'repeat the events', 'show events again', 'show me the events again',
+        'repeat the list', 'repeat events', 'show events', 'show the events', 'list the events',
+        'print the events', 'print the list', 'show me the list', 'show me events', 'show last events',
+        'show previous events', 'show last list', 'show previous list', 'can you provide me the list again',
+        'can you show me the list again', 'can you show the events again', 'can you repeat the events',
+        'can you repeat the list', 'can you print the events', 'can you print the list', 'can you list the events'
+    ]
+    if any(phrase in lower_q for phrase in show_list_phrases):
+        from enhanced_topic_search import EnhancedEventConversationFlow
+        flow = EnhancedEventConversationFlow()
+        event_list_str = flow.get_last_event_list()
+        st.session_state.chat_history.append(AIMessage(content=event_list_str))
+        return
+
+    # --- Q&A about events before any step-based event search flow ---
+    from enhanced_topic_search import EnhancedEventConversationFlow
+    if st.session_state.get('last_found_events') and st.session_state.get('last_found_events_details'):
+        is_new_search = False
+        # Check for new search intent (island/city names, 'find', 'search', etc.)
+        for island in ISLAND_CITY_MAP.keys():
+            if island in lower_q:
+                is_new_search = True
+        if any(word in lower_q for word in ['find', 'search', 'show events', 'look for', 'see events', 'get events', 'list events', 'what events', 'which events', 'events in', 'calendar', 'add event', 'create event', 'schedule event']):
+            is_new_search = True
+        if not is_new_search:
+            # Route to event Q&A
+            flow = EnhancedEventConversationFlow()
+            answer = flow.answer_event_question(question)
+            st.session_state.chat_history.append(AIMessage(content=answer))
+            return
+
+    # --- Step-by-step event search flow ---
     if 'event_search_step' not in st.session_state:
         st.session_state.event_search_step = EVENT_SEARCH_STEPS[0]
         st.session_state.event_search_context = {}
@@ -1444,7 +1555,13 @@ def handle_user_input(question):
         is_island = location.lower() in ISLAND_CITY_MAP
         # If user said 'all events', search with no topic filter
         query = '' if event_type in ['all', 'all events', 'everything', 'any'] else event_type
-        summaries, details = unified_event_search(query, location, is_island)
+        # --- Add date range for event search ---
+        from datetime import datetime, timedelta
+        # Default: next 30 days
+        start_date = datetime.now().strftime('%Y-%m-%d')
+        end_date = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
+        # If time_frame is in context, try to parse it (future improvement)
+        summaries, details = unified_event_search(query, location, is_island, start_date, end_date)
         st.session_state.last_found_events = summaries
         st.session_state.last_found_events_details = details
         response_parts = []
@@ -1456,13 +1573,10 @@ def handle_user_input(question):
         else:
             response_parts.append(f"I couldn't find any events in {location.title()} {time_frame}. Would you like to try a different location or see uncertain events?")
         st.session_state.chat_history.append(AIMessage(content="\n".join(response_parts)))
-        # Reset the step for next search
+        # Reset the step for next search, but allow Q&A on these events
         st.session_state.event_search_step = EVENT_SEARCH_STEPS[0]
         st.session_state.event_search_context = {}
         return
-
-    # --- Existing logic for manual event creation, calendar add, etc. follows here ---
-    # ... (rest of handle_user_input unchanged) ...
 
 def _detect_time_frame_change(question: str) -> str or None:
     """Detect if the user is requesting a time frame change."""
