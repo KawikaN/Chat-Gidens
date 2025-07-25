@@ -1,4 +1,69 @@
-User feedback
+etuUser feedback
 Vector Database
 AI prompting itself with event data so that it can access it
     pass it details and description of data
+
+
+Allow the model to be able to answer quesitons about the events
+    Feed all details about the events to the model
+
+use API to search for events using key words
+
+n8n rss feeds
+file that holds reoccuring events
+llm that searches for events for us
+when we add events to user calendar add it to their cient card
+user client card to catter event searches (suggest similiar events)
+https://oahubusinessconnector.org/events/ scrap this consistantly
+
+
+launch deployed github using pro account
+
+
+user can report events
+event host can come to ask for catering
+
+send Kent json of event info
+surface data for card integration
+
+tag the events
+
+allow users to be able to add events by giving name and date
+
+fix it asking if I want to change cities and it not working
+
+ensure that it works for muiltiple google accounts (many users)
+
+add Vincents events to a list to watch for
+
+Should we have the ai cater a list for the user or let the user choose from all the events.
+
+ask kent:
+how to integrate with tech stack
+how to have it relate to multiple users
+how to have multiple chatss
+integrate with user profile Business
+feed back into the model to learn
+
+text to speach
+reach out to buisness owner during specific times
+allow llm to do event research aswell
+passed in events are sorted by date (use this for effecient sorting and not needing all events as context)
+have premade tags 
+    if the chatbot ever identifies new events under these tags add it to the tags
+    when the user ask for certain tags do not search those evnts that are already apart or have been searched just add the tags
+        Have some way for the chatbot to know that these events dont fit the tags
+            can possibly do this by having a date last processesd and if the tag was processed after that then dont search it
+
+allow the user to confirm or deny if the events fit 
+
+fix dates and events on fed events
+make the links clickable (hyperlink)
+
+chat for related business owners
+    gidens chat reads all chats and can gain info
+
+incorporate auto correct wen user needs to respond a certain way
+
+FILL OUT THE README
+explain what is in the endfile
