@@ -1566,10 +1566,11 @@ def handle_user_input(question):
         st.session_state.last_found_events_details = details
         response_parts = []
         if summaries:
-            response_parts.append(f"Aloha! Here are the upcoming events in {location.title()} {time_frame}:")
+            response_parts.append(f"Aloha! Here are the upcoming events in {location.title()} {time_frame}:\n")
             for i, summary in enumerate(summaries):
-                response_parts.append(f"{i+1}. {summary}")
-            response_parts.append("\nWould you like me to add any of these to your calendar?")
+                resp = f"     {i+1}•   {summary}"
+                response_parts.append(resp.replace(resp[3], ""))
+            response_parts.append("\nWould you like me to add any of these to your calendar? (you may refer to events by their associated number)")
         else:
             response_parts.append(f"I couldn't find any events in {location.title()} {time_frame}. Would you like to try a different location or see uncertain events?")
         st.session_state.chat_history.append(AIMessage(content="\n".join(response_parts)))

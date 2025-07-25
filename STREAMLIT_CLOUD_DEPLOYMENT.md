@@ -31,8 +31,6 @@ Chat-Gidens/
 # Add these in Streamlit Cloud's "Secrets" section
 [secrets]
 OPENAI_API_KEY = "your_openai_api_key_here"
-HUGGINGFACEHUB_API_TOKEN = "your_huggingface_token_here"
-
 # Google OAuth Credentials
 GOOGLE_CLIENT_ID = "your_google_client_id_here"
 GOOGLE_PROJECT_ID = "your_google_project_id_here"

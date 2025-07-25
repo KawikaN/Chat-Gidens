@@ -34,14 +34,8 @@ GOOGLE_CLIENT_SECRET=your_client_secret_here
 5. Create OAuth 2.0 Client ID (Web application)
 6. Copy the credentials to your `.env` file
 
-### 3. Automatic Generation
-
-The application will automatically:
-- Generate `credentials.json` from environment variables when needed
-- Regenerate credentials if the file is missing
-- Handle OAuth flow securely
-
-## 🛠️ Manual Commands
+### 3.  `credentials.json` 
+### 🛠️ Manual Commands
 
 ### Generate credentials.json manually:
 ```bash
@@ -52,31 +46,6 @@ python generate_credentials.py
 ```bash
 python -c "from calendar_integration import generate_credentials_from_env; generate_credentials_from_env()"
 ```
-
-## 🔧 App Features
-
-The application includes several security features:
-
-- **🔧 Regenerate Credentials**: Button to regenerate `credentials.json` from `.env`
-- **🗑️ Clear Authentication**: Button to clear saved authentication tokens
-- **🔑 Test Credentials**: Button to verify credentials are valid
-- **🧪 Test Browser**: Button to test browser opening functionality
-
-## 🚨 Security Notes
-
-- **Never commit `.env` or `credentials.json`** to version control
-- **Keep your `.env` file secure** and don't share it
-- **Rotate credentials regularly** for production use
-- **Use different credentials** for development and production
-
-## 🔄 Migration from Hardcoded Credentials
-
-If you previously had hardcoded credentials:
-
-1. Move your credentials to `.env` file
-2. Delete the old `credentials.json` file
-3. The app will automatically generate a new one from environment variables
-4. Test the OAuth flow to ensure it works
 
 ## ✅ Verification
 

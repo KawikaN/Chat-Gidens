@@ -44,7 +44,6 @@ In your app settings, add these secrets:
 ```toml
 [secrets]
 OPENAI_API_KEY = "your_openai_api_key_here"
-HUGGINGFACEHUB_API_TOKEN = "your_huggingface_token_here"
 
 # Google OAuth Credentials
 GOOGLE_CLIENT_ID = "your_google_client_id_here"
@@ -67,7 +66,6 @@ GOOGLE_CLIENT_SECRET = "your_google_client_secret_here"
 ## 📋 **What Works on Streamlit Cloud**
 
 ### ✅ **Core Features**
-- **Multi-PDF Processing**: Upload and chat with PDF documents
 - **Google Calendar Integration**: View, create, and manage events
 - **Advanced Chat Interface**: Interactive AI-powered conversations
 - **Secure OAuth Authentication**: Google Calendar access
