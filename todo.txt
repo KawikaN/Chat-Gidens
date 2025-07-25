@@ -67,3 +67,6 @@ incorporate auto correct wen user needs to respond a certain way
 
 FILL OUT THE README
 explain what is in the endfile
+
+
+allow keywording 

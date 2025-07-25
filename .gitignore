@@ -56,3 +56,6 @@ Thumbs.db
 .env
 .env
 .env
+
+
+scrape.py
