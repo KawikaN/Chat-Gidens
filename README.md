@@ -40,6 +40,8 @@ cp .env.example .env
 # Edit .env with your API keys (see below for details)
 ```
 
+> **Note:** For Google Calendar integration, you only need the `credentials.json` file (downloaded from Google Cloud Console). The Google-related variables in `.env` (such as `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, etc.) are **optional** and only needed if you want to generate `credentials.json` programmatically (this feature is not implemented by default). If you have `credentials.json` in your app directory, you can skip adding Google OAuth keys to `.env`.
+
 ### 5. Run the application
 ```bash
 streamlit run app.py
@@ -86,8 +88,9 @@ The app will use this key to fetch event data from Ticketmaster. If the key is m
 7. Add authorized redirect URIs:
    - For local development: `http://localhost:8501/`
    - Additional URIs: `/_stcore/authorize` and `/streamlit_oauth_callback`
-8. Click "Create" and copy your credentials
-9. Add the following to your `.env` file:
+8. Click "Create" and download your credentials as `credentials.json`
+9. Place the `credentials.json` file in your app directory (this is all you need for Google Calendar integration).
+10. *(Optional)* If you want to generate `credentials.json` programmatically, add the following to your `.env` file (not required for most users):
    ```env
    GOOGLE_CLIENT_ID="your_google_client_id_here"
    GOOGLE_PROJECT_ID="your_project_id_here"
@@ -96,6 +99,8 @@ The app will use this key to fetch event data from Ticketmaster. If the key is m
    GOOGLE_AUTH_PROVIDER_X509_CERT_URL="https://www.googleapis.com/oauth2/v1/certs"
    GOOGLE_CLIENT_SECRET="your_google_client_secret_here"
    ```
+
+> **In summary:** If you have `credentials.json`, you do **not** need to set Google OAuth keys in `.env`.
 
 ---
 
