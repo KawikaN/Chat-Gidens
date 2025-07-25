@@ -20,9 +20,11 @@ chromadb>=0.4.22
 
 # Google Calendar integration
 google-auth>=2.22.0
-google-auth-oauthlib>=1.0.0
+google-auth-oauthlib>=1.2.0
 google-auth-httplib2>=0.2.0
-google-api-python-client>=2.88.0
+google-api-python-client>=2.92.0
+googleapis-common-protos>=1.60.0
+greenlet>=2.0.2
 
 # HTTP requests
 requests>=2.31.0
